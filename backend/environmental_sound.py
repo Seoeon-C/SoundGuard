@@ -5,7 +5,7 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import List
-
+from beats_runtime.beats import load_model
 import librosa
 import numpy as np
 import torch
@@ -69,7 +69,7 @@ class BeatsEnvironmentClassifier:
         self.model = None
         self.labels: List[str] = []
         self.ready = False
-
+        self.model, self.label_dict = load_model(settings.beats_checkpoint_path)
         try:
             self._load_beats()
             self.ready = True
