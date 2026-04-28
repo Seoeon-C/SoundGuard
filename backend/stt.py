@@ -35,7 +35,7 @@ class WhisperAPI:
         rms = float(np.sqrt(np.mean(audio ** 2)))
         peak = float(np.max(np.abs(audio)))
 
-        if rms < settings.min_rms_for_stt and peak < settings.min_peak_for_stt:
+        if rms < min(settings.min_rms_for_stt, settings.vad_min_rms) and peak < min(settings.min_peak_for_stt, settings.vad_min_peak):
             print(f"[STT] 무음/저음량으로 판단하여 STT 생략: rms={rms:.5f}, peak={peak:.5f}")
             return False
         return True

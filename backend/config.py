@@ -41,5 +41,31 @@ class Settings:
     intrusion_warn_1_seconds: int = int(os.getenv("INTRUSION_WARN_1_SECONDS", "5"))
     intrusion_warn_2_seconds: int = int(os.getenv("INTRUSION_WARN_2_SECONDS", "15"))
 
+    # 앞단 신호 감지기 설정: 작은 목소리와 발소리 후보를 BEATs 전에 잡는다.
+    vad_min_rms: float = float(os.getenv("VAD_MIN_RMS", "0.0012"))
+    vad_min_peak: float = float(os.getenv("VAD_MIN_PEAK", "0.014"))
+    vad_frame_rms_threshold: float = float(os.getenv("VAD_FRAME_RMS_THRESHOLD", "0.0010"))
+    vad_min_active_ratio: float = float(os.getenv("VAD_MIN_ACTIVE_RATIO", "0.06"))
+    vad_min_zcr: float = float(os.getenv("VAD_MIN_ZCR", "0.015"))
+    vad_max_zcr: float = float(os.getenv("VAD_MAX_ZCR", "0.35"))
+    vad_voice_score_threshold: float = float(os.getenv("VAD_VOICE_SCORE_THRESHOLD", "0.45"))
+
+    # 발소리는 전체 RMS가 작고 순간 peak만 튀는 경우가 많아서 기본값을 낮게 둔다.
+    # 실제 환경에서 오탐이 많으면 FOOTSTEP_MIN_PEAK, FOOTSTEP_FRAME_RMS_THRESHOLD를 올린다.
+    footstep_min_peaks: int = int(os.getenv("FOOTSTEP_MIN_PEAKS", "2"))
+    footstep_min_peak: float = float(os.getenv("FOOTSTEP_MIN_PEAK", "0.012"))
+    footstep_frame_rms_threshold: float = float(os.getenv("FOOTSTEP_FRAME_RMS_THRESHOLD", "0.00045"))
+    footstep_frame_peak_threshold: float = float(os.getenv("FOOTSTEP_FRAME_PEAK_THRESHOLD", "0.010"))
+    footstep_dynamic_ratio: float = float(os.getenv("FOOTSTEP_DYNAMIC_RATIO", "2.0"))
+    footstep_min_gap_seconds: float = float(os.getenv("FOOTSTEP_MIN_GAP_SECONDS", "0.16"))
+    footstep_min_interval_seconds: float = float(os.getenv("FOOTSTEP_MIN_INTERVAL_SECONDS", "0.20"))
+    footstep_max_interval_seconds: float = float(os.getenv("FOOTSTEP_MAX_INTERVAL_SECONDS", "1.30"))
+    footstep_score_threshold: float = float(os.getenv("FOOTSTEP_SCORE_THRESHOLD", "0.65"))
+    footstep_max_voice_score: float = float(os.getenv("FOOTSTEP_MAX_VOICE_SCORE", "0.40"))
+    footstep_max_active_ratio: float = float(os.getenv("FOOTSTEP_MAX_ACTIVE_RATIO", "0.28"))
+
+    loud_impulse_peak_threshold: float = float(os.getenv("LOUD_IMPULSE_PEAK_THRESHOLD", "0.60"))
+    loud_impulse_max_active_ratio: float = float(os.getenv("LOUD_IMPULSE_MAX_ACTIVE_RATIO", "0.20"))
+
 
 settings = Settings()
