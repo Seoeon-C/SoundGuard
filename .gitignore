@@ -22,17 +22,26 @@ share/python-wheels/
 *.egg-info/
 .installed.cfg
 *.egg
+*.log
+*.err.log
+*.jsonl
+migration_backup/
+tmp_new_patch/
+_local_artifacts/
 
 # --- AI/Deep Learning 관련 (용량이 커서 제외) ---
 # 데이터셋과 학습된 가중치 모델은 보통 깃허브에 직접 올리지 않습니다.
 data/raw/
 data/processed/
+checkpoints/
+outputs/
 *.h5
 *.pt
 *.pth
 *.weights
 *.tflite
 *.ckpt
+*.zip
 
 # --- Jupyter Notebook ---
 .ipynb_checkpoints
@@ -59,6 +68,11 @@ backend/.env
 backend/checkpoints/
 backend/outputs/
 backend/assets/tts/
+backend/beats/Evaluation_Results/
+backend/reference/
 
 #frontend
 frontend/node_modules/
+
+# transfer learning outputs
+transfer_learning/outputs/

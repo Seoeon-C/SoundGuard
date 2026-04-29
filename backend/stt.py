@@ -13,6 +13,9 @@ SUBTITLE_HALLUCINATION_PHRASES = [
     "구독해주세요",
     "구독해 주세요",
     "좋아요와 구독",
+    "구독과 좋아요",
+    "좋아요 부탁드려요",
+    "구독과 좋아요 부탁드려요",
     "다음 영상에서 만나요",
     "감사합니다",
     "네 감사합니다",
@@ -60,7 +63,7 @@ class WhisperAPI:
         ]
 
         for phrase in hallucination_compacts:
-            if compact == phrase:
+            if phrase in compact:
                 print(f"[STT] 자막형 환각 문구로 판단하여 무시: {text}")
                 return ""
 

@@ -1,46 +1,40 @@
-# SoundGuard - refined rules v2
+# SoundGuard Backend
 
-이번 버전은 `아파요` 같은 짧은 사람 말소리가 BEATs에서 `unknown`으로 나와도 STT에 들어가도록 완화한 버전입니다.
+최종 실행 코드는 이 폴더에 있습니다.
 
-## 핵심 변경
+## 실행
 
-- `ALLOW_UNKNOWN_STT=true`
-- `MIN_RMS_FOR_STT=0.004`
-- `MIN_PEAK_FOR_STT=0.030`
-- `unknown`이라도 음량이 충분하면 `speech candidate`로 보고 Whisper STT 실행
-- `아파요`, `도와`, `살려`, `119`, `다쳤`, `쓰러` 같은 짧은 위급 표현은 STT 필터에서 제거하지 않음
+```powershell
+cd C:\Users\Chan\Desktop\a
+C:\Users\Chan\anaconda3\envs\firstaid-gpu\python.exe main.py
+```
 
-## 흐름
+루트의 `main.py`가 최종 구현인 `backend\main_v2.py`를 실행합니다.
+
+## 주요 파일
 
 ```text
-BEATs 분류
-├─ nature -> pass
-├─ speech -> Whisper STT -> GPT/Rule 판단
-├─ footstep -> 무단침입
-├─ emergency_sound -> 위급
-└─ unknown
-   ├─ 음량 충분 -> Whisper STT
-   └─ 음량 부족 -> pass
+../main.py               루트 실행 진입점
+main.py                  백엔드 내부 실행 진입점
+main_v2.py               녹음, BEATs 분류, STT, 상황 판단 전체 흐름
+config.py                .env 설정 로드 및 경로 관리
+environmental_sound.py   전이학습 BEATs 모델 로드 및 환경음 분류
+decision_v2_v2.py        상황 0/1/2 판단 로직
+output_v2.py             TTS 재생, 로그 저장, Webhook 전송
+stt.py                   Whisper STT 호출 및 STT 후처리
+beats/                   BEATs 모델 코드
+ontology.json            원본 BEATs fallback 라벨 정보
+.env.example             팀원용 환경변수 예시
 ```
 
-## .env 권장값
+## 로컬에 따로 필요한 파일
 
-```env
-MIN_RMS_FOR_STT=0.004
-MIN_PEAK_FOR_STT=0.030
-ALLOW_UNKNOWN_STT=true
-```
+다음 파일은 용량 또는 보안 문제로 git에 올리지 않습니다.
 
-말했는데도 STT가 안 되면 더 낮추세요.
-
-```env
-MIN_RMS_FOR_STT=0.002
-MIN_PEAK_FOR_STT=0.020
-```
-
-무음인데 STT가 너무 자주 돌면 올리세요.
-
-```env
-MIN_RMS_FOR_STT=0.008
-MIN_PEAK_FOR_STT=0.060
+```text
+backend/.env
+backend/checkpoints/best_beats_project.pt
+backend/checkpoints/BEATs_iter3_plus_AS2M_finetuned_on_AS2M_cpt2.pt
+backend/outputs/
+backend/assets/tts/
 ```

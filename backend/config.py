@@ -1,8 +1,22 @@
 from dataclasses import dataclass
 import os
+from pathlib import Path
 from dotenv import load_dotenv
 
-load_dotenv()
+BACKEND_DIR = Path(__file__).resolve().parent
+
+load_dotenv(BACKEND_DIR / ".env")
+
+
+def backend_path(value: str) -> str:
+    path = Path(value)
+    if path.is_absolute():
+        return str(path)
+    return str(BACKEND_DIR / path)
+
+
+def env_backend_path(name: str, default: str) -> str:
+    return backend_path(os.getenv(name, default))
 
 
 def env_bool(name: str, default: str = "false") -> bool:
@@ -15,9 +29,13 @@ class Settings:
     openai_stt_model: str = os.getenv("OPENAI_STT_MODEL", "whisper-1")
     openai_llm_model: str = os.getenv("OPENAI_LLM_MODEL", "gpt-4o-mini")
 
-    beats_py_dir: str = os.getenv("BEATS_PY_DIR", "beats")
-    beats_checkpoint_path: str = os.getenv(
+    beats_py_dir: str = env_backend_path("BEATS_PY_DIR", "beats")
+    beats_checkpoint_path: str = env_backend_path(
         "BEATS_CHECKPOINT_PATH",
+        "checkpoints/BEATs_iter3_plus_AS2M_finetuned_on_AS2M_cpt2.pt",
+    )
+    beats_base_checkpoint_path: str = env_backend_path(
+        "BEATS_BASE_CHECKPOINT_PATH",
         "checkpoints/BEATs_iter3_plus_AS2M_finetuned_on_AS2M_cpt2.pt",
     )
 
