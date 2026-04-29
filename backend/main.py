@@ -1,15 +1,33 @@
 from __future__ import annotations
 
+# backend/server.py
+import sys
+import os
+from pathlib import Path
 import threading
+# --- 중요: main.py와 동일한 경로 로직 추가 ---
+current_dir = Path(__file__).resolve().parent
+beats_path = str(current_dir / "beats")
+if beats_path not in sys.path:
+    sys.path.insert(0, beats_path)
+# ------------------------------------------
+
+import asyncio
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi.middleware.cors import CORSMiddleware
+from datetime import datetime
+
+app = FastAPI()
+
+import getpass
 import time
 from pathlib import Path
 from typing import Optional
-
+from beats_runtime.beats import load_model, load_audio
 import numpy as np
 import sounddevice as sd
 import soundfile as sf
 
-from audio_detectors import SignalDetector
 from config import settings
 from decision import GPTDecisionEngine
 from environmental_sound import BeatsEnvironmentClassifier, SoundEvent
@@ -20,7 +38,13 @@ from stt import WhisperAPI
 TEMP_DIR = Path("outputs/temp")
 TEMP_DIR.mkdir(parents=True, exist_ok=True)
 
+# model, label_dict = load_model(
+#     "checkpoints/BEATs_iter3_plus_AS2M_finetuned_on_AS2M_cpt2.pt"
+# )
+#wav = load_audio("test.wav")
 
+# with torch.no_grad():
+#     preds = model(wav)[0]
 class AuthorizationManager:
     """
     관리자 버튼 방식의 일시정지/재개 관리자.
@@ -29,6 +53,11 @@ class AuthorizationManager:
     - 프로그램 실행 중 콘솔에 p 입력 후 Enter
     - 비밀번호 입력
     - 인증 성공 시 RUNNING <-> PAUSED 토글
+
+    기존 방식과 차이:
+    - 사람이 감지될 때마다 비밀번호를 묻지 않음
+    - 10초 제한 없음
+    - 재시작 버튼을 누르기 전까지 계속 일시정지
     """
 
     def __init__(self) -> None:
@@ -58,7 +87,10 @@ class AuthorizationManager:
             print("[SYSTEM] 감지를 재개합니다.")
 
     def start_admin_button_listener(self) -> None:
-        thread = threading.Thread(target=self._admin_button_loop, daemon=True)
+        thread = threading.Thread(
+            target=self._admin_button_loop,
+            daemon=True,
+        )
         thread.start()
 
     def _admin_button_loop(self) -> None:
@@ -81,8 +113,12 @@ class DwellTimeTracker:
     """
     체류시간 계산기.
 
-    사람 목소리, 발소리, STT 텍스트가 있으면 사람 존재로 보고 체류시간을 누적한다.
-    자연음/배경음이면 체류시간을 초기화한다.
+    - 발소리
+    - 말소리
+    - unknown이지만 speech 후보
+    - STT 텍스트 존재
+
+    위 조건 중 하나가 있으면 사람 존재로 보고 체류시간을 누적합니다.
     """
 
     def __init__(self) -> None:
@@ -112,7 +148,6 @@ class DwellTimeTracker:
 
 class SoundGuardApp:
     def __init__(self) -> None:
-        self.signal_detector = SignalDetector()
         self.env_classifier = BeatsEnvironmentClassifier()
         self.stt = WhisperAPI()
         self.decision_engine = GPTDecisionEngine()
@@ -123,13 +158,13 @@ class SoundGuardApp:
 
     def run(self) -> None:
         print("=" * 70)
-        print("SoundGuard 실행 - VAD/발소리 보강 + BEATs 단일 모델 버전")
-        print("흐름: 1) VAD 목소리 후보 → Whisper  2) 발소리 패턴 → 무단침입  3) BEATs 위험음/자연음")
+        print("SoundGuard 실행 - 관리자 버튼 일시정지 버전")
+        print("0 nature/pass | 1 speech/unknown-candidate->Whisper | 2 footstep->intrusion")
         print(f"위험구역: {settings.zone_name}")
         print(f"위치: {settings.location_text}")
         print(f"좌표: {settings.latitude}, {settings.longitude}")
-        print(f"VAD: rms>={settings.vad_min_rms}, peak>={settings.vad_min_peak}, score>={settings.vad_voice_score_threshold}")
-        print(f"Footstep: peaks>={settings.footstep_min_peaks}, score>={settings.footstep_score_threshold}")
+        print(f"STT threshold: rms>={settings.min_rms_for_stt}, peak>={settings.min_peak_for_stt}")
+        print(f"ALLOW_UNKNOWN_STT={settings.allow_unknown_stt}")
         print("[ADMIN] p 입력 후 Enter: 관리자 비밀번호 입력 후 일시정지/재개")
         print("종료: Ctrl+C")
         print("=" * 70)
@@ -152,11 +187,46 @@ class SoundGuardApp:
                     print("[SYSTEM] 녹음 후 일시정지 상태 확인됨. 이번 입력은 처리하지 않습니다.")
                     continue
 
-                sound_event, stt_text = self._detect_and_transcribe(audio, audio_path)
+                sound_event = self.env_classifier.classify(audio, settings.sample_rate)
+                print(
+                    f"[BEATs] label={sound_event.label}, "
+                    f"conf={sound_event.confidence:.3f}, "
+                    f"raw={sound_event.raw_label}, "
+                    f"rms={sound_event.rms:.5f}, peak={sound_event.peak:.5f}"
+                )
+
+                stt_text = ""
+
+                if sound_event.is_nature:
+                    print("[FLOW] 자연/배경 소리 → pass")
+
+                elif sound_event.is_speech or sound_event.is_unknown_speech_candidate:
+                    if sound_event.is_speech:
+                        print("[FLOW] 말소리 감지 → Whisper STT")
+                    else:
+                        print("[FLOW] unknown이지만 음량 충분 → speech 후보로 보고 Whisper STT")
+
+                    try:
+                        if self.stt.should_transcribe(audio):
+                            stt_text = self.stt.transcribe(audio_path)
+                            print(f"[STT] {stt_text}" if stt_text else "[STT] 유효한 문장 없음")
+                    except Exception as exc:
+                        print(f"[WARN] STT 실패: {exc}")
+
+                elif sound_event.is_footstep:
+                    print("[FLOW] 발소리 감지 → 무단침입 로직")
+
+                elif sound_event.is_emergency_sound:
+                    print("[FLOW] 위험음 감지 → 위급 로직")
+
+                elif sound_event.label == "unknown":
+                    print("[FLOW] unknown이지만 음량 기준 미달 또는 ALLOW_UNKNOWN_STT=false → pass")
 
                 dwell_seconds = self.dwell_tracker.update(sound_event, stt_text=stt_text)
                 print(f"[ZONE] 체류 추정 시간: {dwell_seconds:.1f}초")
 
+                # 기존 자동 비밀번호 요청 로직 제거:
+                # 이제 인증/일시정지는 관리자 버튼(p 입력)으로만 수행됩니다.
                 decision = self.decision_engine.decide(
                     sound_event=sound_event,
                     stt_text=stt_text,
@@ -186,104 +256,6 @@ class SoundGuardApp:
 
         except KeyboardInterrupt:
             print("\nSoundGuard 종료")
-
-    def _detect_and_transcribe(self, audio: np.ndarray, audio_path: Path) -> tuple[SoundEvent, str]:
-        """
-        추천 감지 흐름 구현부.
-
-        1. SignalDetector로 작은 목소리 후보를 먼저 잡는다.
-        2. 목소리 후보이면 Whisper API를 호출한다.
-        3. 목소리가 아니면 발소리 반복 peak 패턴을 확인한다.
-        4. 둘 다 아니면 BEATs로 폭발/비명/유리파손/자연음 등을 분류한다.
-        """
-        signal = self.signal_detector.analyze(audio, settings.sample_rate)
-        print(
-            f"[SIGNAL] rms={signal.rms:.5f}, peak={signal.peak:.5f}, "
-            f"voice_score={signal.voice_score:.2f}, footstep_score={signal.footstep_score:.2f}, "
-            f"active={signal.active_ratio:.2f}, impulse={signal.impulse_ratio:.1f}, zcr={signal.zero_crossing_rate:.3f}, "
-            f"peaks={signal.peak_count}, reason={signal.reason}"
-        )
-
-        stt_text = ""
-
-        if signal.voice_detected:
-            sound_event = SoundEvent(
-                label="speech",
-                confidence=signal.voice_score,
-                raw_label="vad_voice_candidate",
-                rms=signal.rms,
-                peak=signal.peak,
-                top_labels=[("vad_voice_candidate", signal.voice_score)],
-            )
-            print("[FLOW] VAD가 사람 목소리 후보 감지 → Whisper STT")
-            try:
-                if self.stt.should_transcribe(audio):
-                    stt_text = self.stt.transcribe(audio_path)
-                    print(f"[STT] {stt_text}" if stt_text else "[STT] 유효한 문장 없음")
-            except Exception as exc:
-                print(f"[WARN] STT 실패: {exc}")
-            return sound_event, stt_text
-
-        if signal.footstep_detected:
-            sound_event = SoundEvent(
-                label="footstep",
-                confidence=signal.footstep_score,
-                raw_label="energy_peak_footstep_pattern",
-                rms=signal.rms,
-                peak=signal.peak,
-                top_labels=[("energy_peak_footstep_pattern", signal.footstep_score)],
-            )
-            print(f"[FLOW] 발소리 반복 peak 감지 → 무단침입 로직 | peak_times={signal.peak_times[:8]}")
-            return sound_event, stt_text
-
-        sound_event = self.env_classifier.classify(audio, settings.sample_rate)
-        top_text = ""
-        if sound_event.top_labels:
-            top_text = " | top=" + ", ".join(
-                f"{label}:{score:.3f}" for label, score in sound_event.top_labels[:3]
-            )
-
-        print(
-            f"[BEATs] label={sound_event.label}, "
-            f"conf={sound_event.confidence:.3f}, "
-            f"raw={sound_event.raw_label}, "
-            f"rms={sound_event.rms:.5f}, peak={sound_event.peak:.5f}"
-            f"{top_text}"
-        )
-
-        if signal.loud_impulse_detected and sound_event.label == "unknown":
-            sound_event = SoundEvent(
-                label="emergency_sound",
-                confidence=max(sound_event.confidence, 0.70),
-                raw_label="loud_impulse_unknown",
-                rms=signal.rms,
-                peak=signal.peak,
-                top_labels=sound_event.top_labels,
-            )
-            print("[FLOW] 매우 큰 impulse인데 BEATs가 unknown → 보수적으로 위험음 처리")
-        elif sound_event.is_nature:
-            print("[FLOW] 자연/배경 소리 → pass")
-        elif sound_event.is_speech or sound_event.is_unknown_speech_candidate:
-            # 중요: BEATs의 Speech 라벨만으로는 Whisper를 호출하지 않는다.
-            # 발소리/마찰음/기계음도 BEATs에서 Speech로 오인될 수 있고,
-            # Whisper가 "안녕", "시청해주셔서 감사합니다" 같은 환각 문장을 만들 수 있기 때문이다.
-            print("[FLOW] BEATs speech 후보지만 VAD 미검출 → Whisper 호출 안 함, pass")
-            sound_event = SoundEvent(
-                label="unknown",
-                confidence=sound_event.confidence,
-                raw_label=f"beats_speech_without_vad:{sound_event.raw_label}",
-                rms=sound_event.rms,
-                peak=sound_event.peak,
-                top_labels=sound_event.top_labels,
-            )
-        elif sound_event.is_footstep:
-            print("[FLOW] BEATs가 발소리 감지 → 무단침입 로직")
-        elif sound_event.is_emergency_sound:
-            print("[FLOW] BEATs가 위험음 감지 → 위급 로직")
-        else:
-            print("[FLOW] unknown → pass")
-
-        return sound_event, stt_text
 
     def _record_audio(self) -> np.ndarray:
         print(f"[REC] {settings.chunk_seconds}초 녹음 중...")

@@ -1,13 +1,15 @@
 from __future__ import annotations
 
+import importlib.util
+import sys
 from dataclasses import dataclass
-from typing import List, Tuple
-
+from pathlib import Path
+from typing import List
+from beats_runtime.beats import load_model
 import librosa
 import numpy as np
 import torch
 
-from beats_runtime.beats import load_audioset_ontology, load_model
 from config import settings
 
 
@@ -18,7 +20,6 @@ class SoundEvent:
     raw_label: str
     rms: float = 0.0
     peak: float = 0.0
-    top_labels: List[Tuple[str, float]] | None = None
 
     @property
     def is_nature(self) -> bool:
@@ -54,138 +55,140 @@ def get_audio_stats(audio: np.ndarray) -> tuple[float, float]:
 
 class BeatsEnvironmentClassifier:
     """
-    BEATs 단일 모델 기반 1차 소리 분류기.
-
-    역할:
-    1. BEATs 체크포인트를 한 번만 로드한다.
-    2. 입력 오디오를 BEATs 입력 형식으로 전처리한다.
-    3. BEATs Top-K 예측 라벨을 얻는다.
-    4. AudioSet 라벨명을 프로젝트 내부 라벨로 변환한다.
-
-    내부 라벨:
-    - nature: 자연음/배경음/pass
-    - speech: 사람 말소리/STT 대상
-    - footstep: 발소리/무단침입 대상
-    - emergency_sound: 비명, 파손음, 폭발음 등 위급음
-    - unknown: 확실하지 않은 소리. 음량 기준을 넘으면 STT 후보가 될 수 있음
+    BEATs 1차 분류:
+    0. nature: 자연/배경 소리 -> pass
+    1. speech: 말소리 -> Whisper STT
+    2. footstep: 발소리 -> 무단침입
+    + emergency_sound: 비명/충격음/파손음 -> 위급
+    + unknown_speech_candidate: unknown이지만 음량 충분 -> Whisper STT
     """
 
     def __init__(self) -> None:
         self.sample_rate = settings.sample_rate
         self.device = torch.device(settings.device)
         self.model = None
-        self.label_dict = {}
-        self.id_to_name = {}
+        self.labels: List[str] = []
         self.ready = False
+        # self.model, self.label_dict = load_model(settings.beats_checkpoint_path)
+        # try:
+        #     self._load_beats()
+        #     self.ready = True
+        #     print("[BEATs] 모델 로드 성공")
+        # except Exception as exc:
+        #     print(f"[WARN] BEATs 모델 로드 실패. fallback 모드로 실행합니다: {exc}")
 
-        try:
-            self.model, self.label_dict = load_model(settings.beats_checkpoint_path)
-            self.model.to(self.device)
-            self.model.eval()
-            self.id_to_name = load_audioset_ontology()
-            self.ready = True
-            print("[BEATs] 단일 모델 로드 성공")
-        except Exception as exc:
-            print(f"[WARN] BEATs 모델 로드 실패. fallback 모드로 실행합니다: {exc}")
+    # def _load_beats(self) -> None:
+    #     beats_py = Path(settings.beats_py_dir) / "BEATs.py"
+    #     checkpoint_path = Path(settings.beats_checkpoint_path)
+    #     beats_dir = Path(settings.beats_py_dir).resolve()
+
+    #     if str(beats_dir) not in sys.path:
+    #         sys.path.insert(0, str(beats_dir))
+
+    #     if not beats_py.exists():
+    #         raise FileNotFoundError(f"BEATs.py 파일을 찾을 수 없습니다: {beats_py}")
+    #     if not checkpoint_path.exists():
+    #         raise FileNotFoundError(f"BEATs 체크포인트를 찾을 수 없습니다: {checkpoint_path}")
+
+    #     spec = importlib.util.spec_from_file_location("beats_module", str(beats_py))
+    #     if spec is None or spec.loader is None:
+    #         raise RuntimeError("BEATs.py import 준비 실패")
+
+    #     module = importlib.util.module_from_spec(spec)
+    #     sys.modules["beats_module"] = module
+    #     spec.loader.exec_module(module)
+    #     import pathlib
+    #     import torch
+
+    #     torch.serialization.add_safe_globals([pathlib.WindowsPath])
+    #     checkpoint = torch.load(
+    #         checkpoint_path,
+    #         map_location="cpu",
+    #         weights_only=False
+    #     )
+    #     cfg = module.BEATsConfig(checkpoint["cfg"])
+
+    #     model = module.BEATs(cfg)
+    #     model.load_state_dict(checkpoint["model"])
+    #     model.eval()
+    #     model.to(self.device)
+
+    #     self.model = model
+    #     self.labels = checkpoint.get("label_names", [])
 
     def classify(self, audio: np.ndarray, sr: int) -> SoundEvent:
         rms, peak = get_audio_stats(audio)
         audio = self._prepare_audio(audio, sr)
 
         if audio.size == 0:
-            return SoundEvent("nature", 0.0, "empty", rms, peak, [])
+            return SoundEvent("nature", 0.0, "empty", rms, peak)
 
-        if not self.ready or self.model is None:
+        if not self.ready:
             return self._fallback_classify(rms, peak)
 
         with torch.no_grad():
             wav = torch.tensor(audio, dtype=torch.float32).unsqueeze(0).to(self.device)
-            padding_mask = torch.zeros(wav.shape, dtype=torch.bool, device=self.device)
+            padding_mask = torch.zeros(wav.shape, dtype=torch.bool).to(self.device)
+            result = self.model.extract_features(wav, padding_mask=padding_mask)[0]
 
-            output = self.model.extract_features(wav, padding_mask=padding_mask)[0]
-
-            # AudioSet finetuned BEATs는 일반적으로 multi-label 출력이므로 sigmoid를 사용한다.
-            # 출력이 [B, T, C] 형태면 시간축 평균으로 [B, C]로 만든다.
-            if output.ndim == 3:
-                logits = output.mean(dim=1)
+            if result.ndim == 3:
+                logits = result.mean(dim=1)
             else:
-                logits = output
+                logits = result
 
-            probs = torch.sigmoid(logits)[0]
-            top_k = min(5, probs.numel())
-            top_values, top_indices = torch.topk(probs, k=top_k)
+            probs = torch.softmax(logits, dim=-1).cpu().numpy()[0]
+            idx = int(np.argmax(probs))
+            confidence = float(probs[idx])
 
-        top_labels = self._decode_top_labels(top_indices, top_values)
-        raw_label = top_labels[0][0] if top_labels else "unknown"
-        confidence = top_labels[0][1] if top_labels else 0.0
-        refined_label = self._map_to_refined_label(top_labels, confidence, rms, peak)
-
-        return SoundEvent(refined_label, confidence, raw_label, rms, peak, top_labels)
+        raw_label = self.labels[idx] if self.labels and idx < len(self.labels) else f"class_{idx}"
+        refined_label = self._map_to_refined_label(raw_label, confidence, rms, peak)
+        return SoundEvent(refined_label, confidence, raw_label, rms, peak)
 
     def _prepare_audio(self, audio: np.ndarray, sr: int) -> np.ndarray:
         audio = np.asarray(audio, dtype=np.float32)
-
         if audio.ndim > 1:
             audio = audio.mean(axis=1)
 
         if sr != self.sample_rate:
             audio = librosa.resample(audio, orig_sr=sr, target_sr=self.sample_rate)
 
-        # BEATs 입력을 안정화하기 위한 peak normalization.
         peak = float(np.max(np.abs(audio))) if audio.size else 0.0
         if peak > 0:
             audio = audio / peak
 
         return audio.astype(np.float32)
 
-    def _decode_top_labels(self, indices: torch.Tensor, values: torch.Tensor) -> List[Tuple[str, float]]:
-        top_labels: List[Tuple[str, float]] = []
-
-        for idx, score in zip(indices.detach().cpu().tolist(), values.detach().cpu().tolist()):
-            label_id = self.label_dict.get(int(idx), f"class_{int(idx)}")
-            label_name = self.id_to_name.get(label_id, label_id)
-            top_labels.append((str(label_name), float(score)))
-
-        return top_labels
-
-    def _map_to_refined_label(
-        self,
-        top_labels: List[Tuple[str, float]],
-        confidence: float,
-        rms: float,
-        peak: float,
-    ) -> str:
-        joined = " ".join(label for label, _score in top_labels).lower()
+    def _map_to_refined_label(self, raw_label: str, confidence: float, rms: float, peak: float) -> str:
+        text = raw_label.lower()
 
         nature_keywords = [
             "silence", "ambient", "background", "wind", "rain", "water", "stream",
             "sea", "ocean", "waves", "bird", "birds", "insect", "cricket",
             "frog", "thunder", "rustling leaves", "leaves", "forest", "traffic",
-            "engine", "air conditioning", "environmental noise", "quiet",
+            "engine", "air conditioning"
         ]
         speech_keywords = [
             "speech", "talk", "talking", "conversation", "human voice",
             "male speech", "female speech", "child speech", "narration", "monologue",
-            "whispering", "murmur", "babbling", "voice",
+            "whispering", "murmur", "babbling"
         ]
         footstep_keywords = [
             "footstep", "footsteps", "walking", "walk", "steps", "step",
-            "running", "run", "jogging", "stomp", "stomping", "shuffle",
+            "running", "run", "jogging", "stomp", "stomping"
         ]
         emergency_keywords = [
             "scream", "screaming", "yell", "cry", "crying", "shout",
             "crash", "bang", "thump", "slam", "impact", "explosion",
-            "glass", "shatter", "breaking", "gunshot", "alarm", "siren",
-            "fire alarm", "smash", "emergency",
+            "glass", "shatter", "breaking", "gunshot"
         ]
 
-        if any(k in joined for k in emergency_keywords):
-            return "emergency_sound"
-        if any(k in joined for k in footstep_keywords):
+        if any(k in text for k in footstep_keywords):
             return "footstep"
-        if any(k in joined for k in speech_keywords):
+        if any(k in text for k in emergency_keywords):
+            return "emergency_sound"
+        if any(k in text for k in speech_keywords):
             return "speech"
-        if any(k in joined for k in nature_keywords):
+        if any(k in text for k in nature_keywords):
             return "nature"
 
         if confidence < 0.01 and rms < settings.min_rms_for_stt and peak < settings.min_peak_for_stt:
@@ -195,6 +198,7 @@ class BeatsEnvironmentClassifier:
 
     def _fallback_classify(self, rms: float, peak: float) -> SoundEvent:
         if rms < settings.min_rms_for_stt and peak < settings.min_peak_for_stt:
-            return SoundEvent("nature", 0.8, "fallback_silence_or_nature", rms, peak, [])
-
-        return SoundEvent("unknown", min(0.95, rms * 10), "fallback_audio_detected", rms, peak, [])
+            return SoundEvent("nature", 0.8, "fallback_silence_or_nature", rms, peak)
+        # fallback은 실제로 speech/footstep 구분이 불가능하므로 unknown으로 둔다.
+        # main에서 unknown_speech_candidate이면 STT로 보낸다.
+        return SoundEvent("unknown", min(0.95, rms * 10), "fallback_audio_detected", rms, peak)
