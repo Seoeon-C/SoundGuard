@@ -12,6 +12,21 @@ sys.path.append(str(current_dir))
 
 app = FastAPI()
 
+from pathlib import Path
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi.middleware.cors import CORSMiddleware
+import asyncio
+from datetime import datetime
+
+# 1. BEATs 모델 경로 설정 (main.py와 동일)
+current_dir = Path(__file__).resolve().parent
+beats_path = str(current_dir / "beats")
+if beats_path not in sys.path:
+    sys.path.insert(0, beats_path)
+
+app = FastAPI()
+
+# 2. CORS 설정: 리액트 앱의 접속 허용
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
