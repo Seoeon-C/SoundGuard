@@ -4,6 +4,13 @@ import './App.css';
 const RISK_COLOR = { low: '#22c55e', medium: '#f97316', high: '#ef4444' };
 const RISK_LABEL = { low: '낮음', medium: '중간', high: '높음' };
 
+const SOUND_CATEGORIES = [
+  { key: '발소리',  color: '#f97316' },
+  { key: '말소리',  color: '#3b82f6' },
+  { key: '비명소리', color: '#ef4444' },
+  { key: '환경음',  color: '#22c55e' },
+];
+
 const TTS_META = {
   INTRUSION_WARN_1: { label: '1차 경고',  ttsLabel: '1차 침입 경고 방송', color: '#f97316' },
   INTRUSION_WARN_2: { label: '2차 경고',  ttsLabel: '2차 침입 경고 방송', color: '#ef4444' },
@@ -18,13 +25,6 @@ function getAlertMeta(log) {
     ? { label: '감지 중', ttsLabel: '방송 없음', color: '#64748b' }
     : TTS_META.NONE;
 }
-
-const SOUND_CATEGORIES = [
-  { key: '발소리',  color: '#f97316' },
-  { key: '말소리',  color: '#3b82f6' },
-  { key: '비명소리', color: '#ef4444' },
-  { key: '환경음',  color: '#22c55e' },
-];
 
 const DWELL_MAX = 30;
 
@@ -103,7 +103,7 @@ function App() {
           <h2>{data?.status?.name || "정상상황"}</h2>
           <div className="timer">{String(data?.status?.duration || 0).padStart(2, '0')}:00</div>
 
-          {/* ★★★ Priority 2: 체류 시간 게이지 */}
+          {/* 체류 시간 게이지 */}
           <div style={{ marginTop: '10px' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.7rem', marginBottom: '4px' }}>
               <span>체류 시간</span>
@@ -116,7 +116,7 @@ function App() {
             />
           </div>
 
-          {/* ★★★ Priority 2: 경고 단계 배지 */}
+          {/* 경고 단계 배지 */}
           <div style={{ marginTop: '10px', display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
             <span style={{
               padding: '2px 8px', borderRadius: '12px', fontSize: '0.7rem',
@@ -136,7 +136,7 @@ function App() {
           </div>
         </div>
 
-        {/* ★★★ Priority 1: GPT 판단 결과 카드 */}
+        {/* GPT 판단 결과 카드 */}
         <div className="card" style={{ marginTop: '20px' }}>
           <h3>GPT 판단 결과</h3>
 
@@ -206,7 +206,6 @@ function App() {
           <p>{data?.action_msg || "시스템 가동 중입니다."}</p>
         </div>
 
-        {/* STT 텍스트 (별도 카드) */}
         {data?.stt_text && (
           <div className="card" style={{ marginTop: '10px', borderLeft: '5px solid #8b5cf6' }}>
             <span style={{ color: '#8b5cf6', fontWeight: 'bold' }}>🎤 STT 인식 결과:</span>
