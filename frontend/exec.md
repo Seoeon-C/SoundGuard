@@ -2,7 +2,7 @@
 
 #백엔드 실행
 cd backend
-python -m uvicorn server:app --reload
+python -m uvicorn server:app --reload / server.py 실행 (python 버전 3.9 이상)
 
 #프론트 실행
 cd frontend
