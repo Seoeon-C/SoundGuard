@@ -71,40 +71,21 @@ backend/assets/tts/
 backend/beats/Evaluation_Results/
 backend/reference/
 
-<<<<<<< HEAD
 # --- frontend ---
 frontend/node_modules/
 frontend/.pnp
 frontend/.pnp.js
 frontend/coverage/
 frontend/build/
+frontend/.env
 frontend/.env.local
+frontend/.env.production
 frontend/.env.development.local
 frontend/.env.test.local
 frontend/.env.production.local
 frontend/npm-debug.log*
 frontend/yarn-debug.log*
 frontend/yarn-error.log*
-=======
-#frontend
-frontend/node_modules/
 
 # transfer learning outputs
 transfer_learning/outputs/
-<<<<<<< HEAD
-# --- frontend ---
-frontend/node_modules/
-frontend/.pnp
-frontend/.pnp.js
-frontend/coverage/
-frontend/build/
-frontend/.env.local
-frontend/.env.development.local
-frontend/.env.test.local
-frontend/.env.production.local
-frontend/npm-debug.log*
-frontend/yarn-debug.log*
-frontend/yarn-error.log*
-=======
->>>>>>> 8643c3b99f45d753abeb9b78e5ccdfb1c0bc6f4f
->>>>>>> origin/feature/lhs

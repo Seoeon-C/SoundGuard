@@ -220,69 +220,12 @@ class SoundGuardApp:
                     authorized=False,
                 )
 
-                # 응급 잠금 처리 (침입 경고 가드보다 먼저 실행)
-                decision, should_emergency_announce = self._apply_emergency_lock(decision)
-                in_emergency_lock = time.time() < self.emergency_active_until
-
-                if not in_emergency_lock:
-                    # 1차 경고 미발령 상태에서 2차 경고가 나오면 → 1차 경고로 강제 변환
-                    if decision.tts_key == "INTRUSION_WARN_2" and not self.warn1_issued:
-                        print("[WARN_ORDER] 1차 경고 미발령 상태. INTRUSION_WARN_2 → INTRUSION_WARN_1 강제 변환")
-                        decision = DecisionResult(
-                            situation=decision.situation,
-                            situation_name=decision.situation_name,
-                            risk_level="low",
-                            reason=decision.reason,
-                            action="1차 경고 방송",
-                            tts_key="INTRUSION_WARN_1",
-                            send_to_control_room=decision.send_to_control_room,
-                            emergency_candidate=decision.emergency_candidate,
-                            source=decision.source + " (forced warn1)",
-                        )
-
-                    # 1차 경고 이미 발령 + 사람이 계속 감지됨 → 2차 경고로 에스컬레이션
-                    if decision.tts_key == "INTRUSION_WARN_1" and self.warn1_issued:
-                        print("[WARN_ORDER] 1차 경고 이미 발령. INTRUSION_WARN_1 → INTRUSION_WARN_2 에스컬레이션")
-                        decision = DecisionResult(
-                            situation=decision.situation,
-                            situation_name=decision.situation_name,
-                            risk_level="medium",
-                            reason=decision.reason,
-                            action="2차 경고 방송 및 상황실 전송",
-                            tts_key="INTRUSION_WARN_2",
-                            send_to_control_room=True,
-                            emergency_candidate=decision.emergency_candidate,
-                            source=decision.source + " (escalated warn2)",
-                        )
-
-                if decision.tts_key == "INTRUSION_WARN_1":
-                    self.warn1_issued = True
-                    self.silence_cycles = 0
-
-                # 응급 상황 발생 시 침입 경고 상태 초기화
-                if decision.situation == 2:
-                    self.warn1_issued = False
-                    self.silence_cycles = 0
-
-                if decision.situation == 0:
-                    self.silence_cycles += 1
-                    # 30초(6사이클) 연속 이상없음 → 새 상황으로 리셋
-                    if self.silence_cycles >= 6:
-                        if self.warn1_issued:
-                            print(f"[RESET] {self.silence_cycles * settings.chunk_seconds}초 연속 이상없음. 경고 상태 초기화.")
-                        self.warn1_issued = False
-                        self.silence_cycles = 0
-                else:
-                    self.silence_cycles = 0
+                decision, should_speak = self.post_process_decision(decision)
 
                 self._print_cycle_summary(sound_event, stt_text, dwell_seconds, decision)
 
-                if decision.tts_key != "NONE":
-                    if decision.tts_key == "EMERGENCY_GUIDE" and not should_emergency_announce:
-                        remaining = self.emergency_active_until - time.time()
-                        print(f"[EMERGENCY] 재안내 대기 중 (잠금 남은 시간 {remaining:.0f}초)")
-                    else:
-                        self.speaker.speak(decision.tts_key)
+                if should_speak:
+                    self.speaker.speak(decision.tts_key)
 
                 if decision.situation in {1, 2} or decision.send_to_control_room:
                     self.logger.record_and_send(
@@ -294,6 +237,68 @@ class SoundGuardApp:
 
         except KeyboardInterrupt:
             print("\nSoundGuard 종료")
+
+    def post_process_decision(self, decision: DecisionResult) -> tuple[DecisionResult, bool]:
+        """경고 순서, 응급 잠금, 상태 업데이트를 적용하고 (최종 decision, TTS 재생 여부) 반환."""
+        decision, should_emergency_announce = self._apply_emergency_lock(decision)
+        in_emergency_lock = time.time() < self.emergency_active_until
+
+        if not in_emergency_lock:
+            if decision.tts_key == "INTRUSION_WARN_2" and not self.warn1_issued:
+                print("[WARN_ORDER] 1차 경고 미발령 상태. INTRUSION_WARN_2 → INTRUSION_WARN_1 강제 변환")
+                decision = DecisionResult(
+                    situation=decision.situation,
+                    situation_name=decision.situation_name,
+                    risk_level="low",
+                    reason=decision.reason,
+                    action="1차 경고 방송",
+                    tts_key="INTRUSION_WARN_1",
+                    send_to_control_room=decision.send_to_control_room,
+                    emergency_candidate=decision.emergency_candidate,
+                    source=decision.source + " (forced warn1)",
+                )
+
+            if decision.tts_key == "INTRUSION_WARN_1" and self.warn1_issued:
+                print("[WARN_ORDER] 1차 경고 이미 발령. INTRUSION_WARN_1 → INTRUSION_WARN_2 에스컬레이션")
+                decision = DecisionResult(
+                    situation=decision.situation,
+                    situation_name=decision.situation_name,
+                    risk_level="medium",
+                    reason=decision.reason,
+                    action="2차 경고 방송 및 상황실 전송",
+                    tts_key="INTRUSION_WARN_2",
+                    send_to_control_room=True,
+                    emergency_candidate=decision.emergency_candidate,
+                    source=decision.source + " (escalated warn2)",
+                )
+
+        if decision.tts_key == "INTRUSION_WARN_1":
+            self.warn1_issued = True
+            self.silence_cycles = 0
+
+        if decision.situation == 2:
+            self.warn1_issued = False
+            self.silence_cycles = 0
+
+        if decision.situation == 0:
+            self.silence_cycles += 1
+            if self.silence_cycles >= 6:
+                if self.warn1_issued:
+                    print(f"[RESET] {self.silence_cycles * settings.chunk_seconds}초 연속 이상없음. 경고 상태 초기화.")
+                self.warn1_issued = False
+                self.silence_cycles = 0
+        else:
+            self.silence_cycles = 0
+
+        if decision.tts_key == "NONE":
+            return decision, False
+
+        if decision.tts_key == "EMERGENCY_GUIDE" and not should_emergency_announce:
+            remaining = self.emergency_active_until - time.time()
+            print(f"[EMERGENCY] 재안내 대기 중 (잠금 남은 시간 {remaining:.0f}초)")
+            return decision, False
+
+        return decision, True
 
     def _apply_emergency_lock(self, decision: DecisionResult) -> tuple[DecisionResult, bool]:
         """응급 잠금 상태를 관리하고, 이번 사이클에 TTS를 재생할지 여부를 반환."""

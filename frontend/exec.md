@@ -4,6 +4,7 @@
 ```
 cd backend
 python -m uvicorn server:app --reload
+또는
 server.py 실행
 ```
 

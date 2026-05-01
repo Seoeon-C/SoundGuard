@@ -21,6 +21,7 @@ const LOG_COLORS = {
   2:  { c:C.red,   label:"위험감지" },
   warn:{ c:C.amber, label:"경고방송" },
   emg: { c:C.red,   label:"응급방송" },
+  voice:{ c:C.violet, label:"음성" },
 }
 
 const DEFAULT_MSGS = {
@@ -29,6 +30,7 @@ const DEFAULT_MSGS = {
   emg:"위험 상황이 감지되었습니다. 신속히 대피하시고 119에 신고하여 주십시오.",
 }
 
+const genId = () => Math.random().toString(36).slice(2) + Date.now().toString(36)
 const fmt = s => `${String(Math.floor(s/60)).padStart(2,"0")}:${String(s%60).padStart(2,"0")}`
 const nowStr = () => { const d=new Date(); return [d.getHours(),d.getMinutes(),d.getSeconds()].map(v=>String(v).padStart(2,"0")).join(":") }
 
@@ -47,7 +49,14 @@ export default function SoundGuardDashboard() {
   const [screen, setScreen] = useState("login")  // "login" | "config" | "main"
   const [adminId, setAdminId] = useState("")
   const [config, setConfig] = useState({ zone:"", w1:"", w2:"", emg:"" })
-  const SERVER_IP = "192.168.1.100:8000"
+  // ─── 백엔드 연결 설정 ──────────────────────────────────────────
+  // [Vite 로컬 개발] server.py를 본인 PC에서 실행 후 아래 줄 사용
+  // const SERVER_IP = "localhost:8000"
+  //
+  // [오라클 배포] .env.production 의 VITE_BACKEND_IP 자동 적용
+  // frontend/.env.production → VITE_BACKEND_IP=공인IP:8000
+  const SERVER_IP = import.meta.env.VITE_BACKEND_IP || "localhost:8000"
+  // ──────────────────────────────────────────────────────────────
 
   const go = useCallback((scr, cfg) => {
     if (cfg) setConfig(cfg)
@@ -287,7 +296,6 @@ function MainScreen({ adminId, config, serverIP, onGoConfig, onLogout, onUpdateC
   const wsRef = useRef(null)
   const reconnectRef = useRef(null)
 
-  // 팝업 상태들
   const [mentPopup, setMentPopup] = useState(false)
   const [mentEditModal, setMentEditModal] = useState(false)
   const [zoneModal, setZoneModal] = useState(false)
@@ -295,10 +303,6 @@ function MainScreen({ adminId, config, serverIP, onGoConfig, onLogout, onUpdateC
 
   const [mapCoord, setMapCoord] = useState("37.5665° N, 126.9780° E")
   const [mapAddr, setMapAddr] = useState(config.zone || "관할 구역 주소 미상")
-  const [zoneList, setZoneList] = useState(["관악산 출입통제 구역", "강변 저수지 위험구역", "폐공사장 A구역"])
-  const [newZoneName, setNewZoneName] = useState("")
-
-  // 신규: 설정 팝업, 알림 패널
   const [settingsModal, setSettingsModal] = useState(false)
   const [notifPanelOpen, setNotifPanelOpen] = useState(false)
   const [notifications, setNotifications] = useState([])
@@ -309,12 +313,91 @@ function MainScreen({ adminId, config, serverIP, onGoConfig, onLogout, onUpdateC
   const pausedRef  = useRef(paused)
   const configRef  = useRef(config)
   const adminRef   = useRef(adminId)
-  const zoneListRef = useRef(zoneList)
+  const selectedZoneIdRef = useRef(null)
+  const mapCoordRef = useRef(mapCoord)
+  const mapAddrRef = useRef(mapAddr)
+  const zonesRef = useRef([])
   statusRef.current = status; pausedRef.current = paused
   configRef.current = config; adminRef.current  = adminId
-  zoneListRef.current = zoneList
+  mapCoordRef.current = mapCoord
+  mapAddrRef.current = mapAddr
 
   const startTime = useRef(nowStr())
+
+  /* 구역 */
+  const [zones, setZones] = useState([
+    { id: genId(), name: "관악산 출입통제 구역", coord: "37.5665° N, 126.9780° E", addr: "관악산 출입통제 구역" },
+    { id: genId(), name: "강변 저수지 위험구역", coord: "37.5665° N, 127.9780° E", addr: "강변 저수지" },
+    { id: genId(), name: "폐공사장 A구역",       coord: "37.0000° N, 127.0000° E", addr: "폐공사장 A구역" },
+  ])
+
+  const [selectedZoneId, setSelectedZoneId] = useState(null)
+  const [newZoneName, setNewZoneName] = useState("")
+  const [newZoneCoord, setNewZoneCoord] = useState("37.5665° N, 126.9780° E")
+  const [newZoneAddr, setNewZoneAddr] = useState("")
+
+  selectedZoneIdRef.current = selectedZoneId
+  zonesRef.current = zones
+
+  useEffect(() => {
+    if (!selectedZoneId && zones.length > 0) {
+      const firstZone = zones[0]
+      setSelectedZoneId(firstZone.id)
+      onUpdateConfig({ ...configRef.current, zone: firstZone.name })
+      setMapCoord(firstZone.coord)
+      setMapAddr(firstZone.addr)
+    }
+  }, [selectedZoneId, zones])
+
+  const selectZone = (zone) => {
+    setSelectedZoneId(zone.id)
+    onUpdateConfig({ ...configRef.current, zone: zone.name })
+    setMapCoord(zone.coord)
+    setMapAddr(zone.addr)
+
+    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+      wsRef.current.send(JSON.stringify({
+        type: "zone_select",
+        zone_id: zone.id,
+        zone_name: zone.name,
+        coord: zone.coord,
+        addr: zone.addr,
+      }))
+    }
+
+    addLog("sys", "구역 변경", zone.name)
+  }
+
+  const addZone = () => {
+    const name = newZoneName.trim()
+    const coord = newZoneCoord.trim()
+    const addr = newZoneAddr.trim() || name
+    if (!name) return
+
+    const next = { id: genId(), name, coord, addr }
+    setZones(prev => [...prev, next])
+    selectZone(next)
+    setNewZoneName("")
+    setNewZoneCoord("37.5665° N, 126.9780° E")
+    setNewZoneAddr("")
+  }
+
+  const deleteZone = (id) => {
+    const nextZones = zones.filter(z => z.id !== id)
+    setZones(nextZones)
+
+    if (selectedZoneId === id) {
+      const nextZone = nextZones[0]
+      if (nextZone) {
+        selectZone(nextZone)
+      } else {
+        setSelectedZoneId(null)
+        onUpdateConfig({ ...configRef.current, zone: "" })
+        setMapCoord("37.5665° N, 126.9780° E")
+        setMapAddr("관할 구역 주소 미상")
+      }
+    }
+  }
 
   /* 시계 */
   useEffect(() => {
@@ -337,36 +420,11 @@ function MainScreen({ adminId, config, serverIP, onGoConfig, onLogout, onUpdateC
     addLog("sys", "시스템 시작", `관리자 ${adminId} 접속 · 모니터링 시작`)
   }, [])
 
-  /* 다른 관리구역 알림 시뮬레이션 */
-  useEffect(() => {
-    const generate = () => {
-      const others = zoneListRef.current.filter(z => z !== configRef.current.zone)
-      if (others.length === 0) return
-      const zone = others[Math.floor(Math.random() * others.length)]
-      const type = Math.random() > 0.5 ? 1 : 2
-      const msgs = {
-        1: "무단침입 감지 — 경고 방송 송출 중",
-        2: "위험음(비명소리) 감지 — 즉각 대응 필요",
-      }
-      setNotifications(prev => [{
-        id: Date.now() + Math.random(),
-        zoneName: zone,
-        type,
-        message: msgs[type],
-        time: nowStr(),
-        read: false,
-      }, ...prev].slice(0, 20))
-    }
-
-    const firstTimer = setTimeout(generate, 6000)
-    const iv = setInterval(generate, 22000)
-    return () => { clearTimeout(firstTimer); clearInterval(iv) }
-  }, [])
-
   const addLog = useCallback((type, title, detail) => {
     const t = nowStr()
     setLogs(p => [{ id:Date.now()+Math.random(), t, type, title, detail }, ...p].slice(0, 100))
   }, [])
+
   const sendTtsConfig = useCallback(() => {
     if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
       const cfg = configRef.current
@@ -379,22 +437,95 @@ function MainScreen({ adminId, config, serverIP, onGoConfig, onLogout, onUpdateC
     }
   }, [])
 
+  const sendZonesSync = useCallback(() => {
+    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+      wsRef.current.send(JSON.stringify({
+        type: "zones_sync",
+        zones: zonesRef.current.map(z => ({
+          id: z.id,
+          name: z.name,
+          coord: z.coord,
+          addr: z.addr,
+        })),
+      }))
+    }
+  }, [])
+
+  const pushOtherZoneNotification = useCallback((payload) => {
+    const zoneId = payload.zone_id || payload.zoneId
+    const zoneName = payload.zone_name || payload.zoneName || "다른 구역"
+
+    if (!zoneId || zoneId === selectedZoneIdRef.current) return
+
+    const kind =
+      payload.kind ||
+      (payload.tts_key === "INTRUSION_WARN_2" ? "warn2" :
+       payload.tts_key === "EMERGENCY_GUIDE" || payload.tts_key === "EVACUATION_GUIDE" ? "emergency" :
+       "warn1")
+
+    const type = payload.situation === 2 || kind === "emergency" ? 2 : 1
+
+    setNotifications(prev => [{
+      id: Date.now() + Math.random(),
+      zoneId,
+      zoneName,
+      coord: payload.coord || payload.map_coord || "37.5665° N, 126.9780° E",
+      addr: payload.addr || payload.address || zoneName,
+      kind,
+      type,
+      title: kind === "emergency" ? "응급상황" : "무단침입",
+      message:
+        payload.message || payload.reason ||
+        (kind === "warn1" ? "1차 경고 방송 송출" :
+         kind === "warn2" ? "2차 경고 방송 송출" :
+         "응급 안내 방송 송출"),
+      time: payload.timestamp || nowStr(),
+      read: false,
+    }, ...prev].slice(0, 30))
+  }, [])
+
   useEffect(() => {
     let closed = false
 
     const connect = () => {
-      const ws = new WebSocket("ws://localhost:8000/ws")
+      const ws = new WebSocket(`ws://${serverIP}/ws`)
       wsRef.current = ws
 
       ws.onopen = () => {
         console.log("✅ 서버 연결 성공")
-        addLog("sys", "백엔드 연결 성공", "ws://localhost:8000/ws")
+        addLog("sys", "백엔드 연결 성공", `ws://${serverIP}/ws`)
         sendTtsConfig()
+        sendZonesSync()
+
+        const currentZone =
+          zonesRef.current.find(z => z.id === selectedZoneIdRef.current) ||
+          zonesRef.current[0]
+
+        if (currentZone) {
+          selectedZoneIdRef.current = currentZone.id
+          setSelectedZoneId(currentZone.id)
+          onUpdateConfig({ ...configRef.current, zone: currentZone.name })
+          setMapCoord(currentZone.coord)
+          setMapAddr(currentZone.addr)
+
+          ws.send(JSON.stringify({
+            type: "zone_select",
+            zone_id: currentZone.id,
+            zone_name: currentZone.name,
+            coord: currentZone.coord,
+            addr: currentZone.addr,
+          }))
+        }
       }
 
       ws.onmessage = (event) => {
         const data = JSON.parse(event.data)
         console.log("📡 서버 데이터:", data)
+
+        if (data.type === "zone_alert") {
+          pushOtherZoneNotification(data)
+          return
+        }
 
         if (data.type === "status") {
           if (data.message === "paused") setPaused(true)
@@ -412,7 +543,7 @@ function MainScreen({ adminId, config, serverIP, onGoConfig, onLogout, onUpdateC
           addLog("sys", "자가진단 완료", "백엔드 점검 결과 수신")
           return
         }
-        if (data.type !== "analysis") return
+        if (data.type && data.type !== "analysis") return
 
         const situation = Number(data.situation ?? 0)
         setStatus(situation)
@@ -424,13 +555,75 @@ function MainScreen({ adminId, config, serverIP, onGoConfig, onLogout, onUpdateC
           emergency: situation === 2 ? 80 : 0,
           impact_noise: 0,
         })
-        setLastSnd(data.beats_raw_label || data.beats_label || "—")
+
+        const activeZone = zonesRef.current.find(z => z.id === selectedZoneIdRef.current)
+        const activeZoneCoord = activeZone?.coord || mapCoordRef.current
+        const activeZoneAddr = activeZone?.addr || mapAddrRef.current
+        setLastSnd(data.stt_text?.trim() ? "speech" : (data.beats_raw_label || data.beats_label || "—"))
+
+        let eventTitle = data.situation_name || "분석 결과"
+        let noticeKind = null
+        let noticeType = situation
+
+        if (data.tts_key === "INTRUSION_WARN_1") {
+          eventTitle = "무단침입 - 1차 경고 방송"
+          noticeKind = "warn1"
+          noticeType = 1
+        } else if (data.tts_key === "INTRUSION_WARN_2") {
+          eventTitle = "무단침입 - 2차 경고 방송"
+          noticeKind = "warn2"
+          noticeType = 1
+        } else if (data.tts_key === "EMERGENCY_GUIDE" || data.tts_key === "EVACUATION_GUIDE") {
+          eventTitle = "위험감지 - 응급 안내 방송"
+          noticeKind = "emergency"
+          noticeType = 2
+        } else if (situation === 1) {
+          eventTitle = "무단침입"
+        } else if (situation === 2) {
+          eventTitle = "위험감지"
+          noticeKind = "emergency"
+          noticeType = 2
+        }
 
         addLog(
           situation === 2 ? 2 : situation === 1 ? 1 : "n",
-          data.situation_name || "분석 결과",
-          data.reason || ""
+          eventTitle,
+          data.stt_text?.trim()
+            ? `음성 감지: "${data.stt_text.trim()}"`
+            : data.reason || ""
         )
+
+        if (data.stt_text && data.stt_text.trim()) {
+          addLog("voice", "음성 인식 결과", `"${data.stt_text.trim()}"`)
+        }
+
+        const currentMonitoringZoneId = selectedZoneIdRef.current
+        const incomingZoneId = data.zone_id || data.zoneId || null
+        const incomingZoneName = data.zone_name || data.zoneName || "관리구역 미지정"
+
+        const isOtherZoneAlert =
+          Boolean(incomingZoneId) &&
+          incomingZoneId !== "default" &&
+          incomingZoneId !== currentMonitoringZoneId
+
+        if (noticeKind && isOtherZoneAlert) {
+          setNotifications(prev => [{
+            id: Date.now() + Math.random(),
+            zoneId: incomingZoneId,
+            zoneName: incomingZoneName,
+            coord: data.coord || activeZoneCoord,
+            addr: data.addr || activeZoneAddr,
+            kind: noticeKind,
+            type: noticeType,
+            title: noticeKind === "emergency" ? "응급상황" : "무단침입",
+            message:
+              noticeKind === "warn1" ? "1차 경고 방송 송출" :
+              noticeKind === "warn2" ? "2차 경고 방송 송출" :
+              "응급 안내 방송 송출",
+            time: data.timestamp || nowStr(),
+            read: false,
+          }, ...prev].slice(0, 30))
+        }
 
         if (situation === 0) {
           setDetected(false)
@@ -474,18 +667,18 @@ function MainScreen({ adminId, config, serverIP, onGoConfig, onLogout, onUpdateC
       if (reconnectRef.current) clearTimeout(reconnectRef.current)
       if (wsRef.current) wsRef.current.close()
     }
-  }, [addLog, sendTtsConfig])
+  }, [addLog, sendTtsConfig, sendZonesSync, pushOtherZoneNotification])
 
+  useEffect(() => {
+    sendZonesSync()
+  }, [zones, sendZonesSync])
 
   const togglePause = () => {
     const next = !pausedRef.current
     setPaused(next)
 
     if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
-      wsRef.current.send(JSON.stringify({
-        type: "pause",
-        paused: next,
-      }))
+      wsRef.current.send(JSON.stringify({ type: "pause", paused: next }))
       addLog("sys", next ? "감지 일시정지 요청" : "감지 재개 요청", `관리자 ${adminRef.current}`)
     } else {
       addLog("sys", "서버 미연결", "WebSocket 연결 후 다시 시도하세요")
@@ -494,10 +687,16 @@ function MainScreen({ adminId, config, serverIP, onGoConfig, onLogout, onUpdateC
 
   const unreadCount = notifications.filter(n => !n.read).length
 
-  const switchToZone = (zoneName) => {
-    onUpdateConfig({ ...configRef.current, zone: zoneName })
-    setMapAddr(zoneName)
-    setNotifications(prev => prev.map(n => n.zoneName === zoneName ? { ...n, read: true } : n))
+  const switchToZone = (notice) => {
+    const zone = zones.find(z => z.id === notice.zoneId || z.name === notice.zoneName)
+    if (zone) {
+      selectZone(zone)
+    } else {
+      onUpdateConfig({ ...configRef.current, zone: notice.zoneName || "관리구역 미지정" })
+      setMapCoord(notice.coord || "37.5665° N, 126.9780° E")
+      setMapAddr(notice.addr || notice.zoneName || "관할 구역 주소 미상")
+    }
+    setNotifications(prev => prev.map(n => n.id === notice.id ? { ...n, read: true } : n))
     setNotifPanelOpen(false)
   }
 
@@ -523,7 +722,22 @@ function MainScreen({ adminId, config, serverIP, onGoConfig, onLogout, onUpdateC
 
   const sd = STATUS_DATA[status]
 
-  /* 레이아웃 스타일 */
+  const parseCoord = (coord) => {
+    const nums = String(coord).match(/-?\d+(\.\d+)?/g)
+    return { lat: nums?.[0] || "37.5665", lon: nums?.[1] || "126.9780" }
+  }
+
+  const { lat, lon } = parseCoord(mapCoord)
+  const selectedZone = zones.find(z => z.id === selectedZoneId)
+  const currentZoneName = selectedZone?.name || config.zone || "관리구역 미지정"
+  const mapSrc =
+    `/map.html?lat=${encodeURIComponent(lat)}` +
+    `&lon=${encodeURIComponent(lon)}` +
+    `&name=${encodeURIComponent(currentZoneName)}` +
+    `&addr=${encodeURIComponent(mapAddr || "관할 구역 주소 미상")}` +
+    `&status=${status === 2 ? "danger" : status === 1 ? "warning" : "normal"}` +
+    `&key=${encodeURIComponent(VWORLD_KEY || "")}`
+
   const hdrSt = { display:"flex", alignItems:"center", gap:8, padding:"9px 16px", borderBottom:`1px solid ${C.bd}`, background:"rgba(7,14,28,.96)", flexShrink:0, flexWrap:"wrap", rowGap:6 }
   const chipSt = { fontSize:10, color:C.t3, padding:"3px 8px", background:"rgba(255,255,255,.025)", border:`1px solid ${C.bd}`, borderRadius:4, display:"flex", alignItems:"center", gap:4, whiteSpace:"nowrap" }
   const mBtnSt = { background:"none", border:`1px solid ${C.bd}`, borderRadius:5, padding:"4px 9px", color:C.t2, cursor:"pointer", fontSize:10, fontFamily:"inherit", whiteSpace:"nowrap" }
@@ -535,8 +749,6 @@ function MainScreen({ adminId, config, serverIP, onGoConfig, onLogout, onUpdateC
 
       {/* ── 헤더 ── */}
       <div style={hdrSt}>
-
-        {/* 좌측: 프로그램명  현재 관리구역명  로그인 ID */}
         <div style={{ display:"flex", alignItems:"center", gap:8 }}>
           <div style={{ fontSize:14, fontWeight:800, whiteSpace:"nowrap" }}>🔊 SoundGuard</div>
           <div style={{ fontSize:10, color:C.t2, padding:"3px 10px", background:"rgba(255,255,255,.04)", border:`1px solid ${C.bd}`, borderRadius:20, maxWidth:200, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>
@@ -545,20 +757,13 @@ function MainScreen({ adminId, config, serverIP, onGoConfig, onLogout, onUpdateC
           <div style={chipSt}>👤 {adminId}</div>
         </div>
 
-        {/* 우측: 감지 일시정지 | 안내멘트 설정 | 알림 | 설정 */}
         <div style={{ marginLeft:"auto", display:"flex", alignItems:"center", gap:5, flexWrap:"wrap" }}>
-
-          {/* 감지 일시정지 */}
           <button onClick={togglePause} style={{ ...mBtnSt, color:paused?C.green:C.amber, borderColor:paused?"rgba(52,211,153,.3)":"rgba(251,191,36,.3)", background:paused?"rgba(52,211,153,.07)":"rgba(251,191,36,.07)" }}>
             {paused ? "▶ 감지 재개" : "⏸ 감지 일시정지"}
           </button>
-
-          {/* 안내 멘트 설정 */}
           <button onClick={() => setMentPopup(true)} style={{ ...mBtnSt, color:C.t1, background:"rgba(255,255,255,.05)" }}>
             📝 안내멘트 설정
           </button>
-
-          {/* 알림 버튼 */}
           <button
             onClick={() => setNotifPanelOpen(p => !p)}
             style={{ ...mBtnSt, position:"relative", color: unreadCount > 0 ? C.cyan : C.t2, borderColor: unreadCount > 0 ? "rgba(34,211,238,.3)" : C.bd, background: unreadCount > 0 ? "rgba(34,211,238,.07)" : "none" }}
@@ -570,13 +775,11 @@ function MainScreen({ adminId, config, serverIP, onGoConfig, onLogout, onUpdateC
               </span>
             )}
           </button>
-
-          {/* 설정 */}
           <button style={{ ...mBtnSt }} onClick={() => setSettingsModal(true)}>⚙ 설정</button>
         </div>
       </div>
 
-      {/* ── 바디 (좌/우 2단 레이아웃) ── */}
+      {/* ── 바디 ── */}
       <div style={{ display:"grid", gridTemplateColumns:"280px 1fr", flex:1, overflow:"hidden", minHeight:0 }}>
 
         {/* 좌측 패널 */}
@@ -602,7 +805,7 @@ function MainScreen({ adminId, config, serverIP, onGoConfig, onLogout, onUpdateC
           <div style={{ ...cardSt, flexShrink:0 }}>
             <div style={mcHeadSt}><span style={mctSt}>📍 구역 정보</span></div>
             <div style={{ display:"flex", flexDirection:"column" }}>
-              {[["구역명", config.zone||"—"], ["감지 장치", "마이크 #1"], ["모니터링 시작", startTime.current]].map(([l,v])=>(
+              {[["구역명", currentZoneName||"—"], ["감지 장치", "마이크 #1"], ["모니터링 시작", startTime.current]].map(([l,v])=>(
                 <div
                   key={l}
                   style={{ padding:"10px 12px", borderBottom:`1px solid ${C.bd}`, cursor: l==="구역명" ? "pointer" : "default", transition:"background-color 0.2s" }}
@@ -669,52 +872,21 @@ function MainScreen({ adminId, config, serverIP, onGoConfig, onLogout, onUpdateC
         {/* 중앙 패널 */}
         <div style={{ display:"flex", flexDirection:"column", padding:12, gap:10, overflow:"hidden" }}>
 
-          
           {/* 지도 시각화 */}
           <div style={{ ...cardSt, flex:1, position:"relative", background:"#0a1424" }}>
-            <div style={{
-              position:"absolute",
-              top:12,
-              left:12,
-              background:"rgba(10,20,40,.8)",
-              padding:"5px 10px",
-              borderRadius:6,
-              border:`1px solid ${C.bd}`,
-              fontSize:11,
-              fontWeight:700,
-              color:C.t1,
-              zIndex:2
-            }}>
+            <div style={{ position:"absolute", top:12, left:12, background:"rgba(10,20,40,.8)", padding:"5px 10px", borderRadius:6, border:`1px solid ${C.bd}`, fontSize:11, fontWeight:700, color:C.t1, zIndex:2 }}>
               🗺 현재 음성감지구역 지도
             </div>
 
             <iframe
+              key={mapSrc}
               title="SoundGuard Map"
-              src={`/map.html?lat=37.5665&lon=126.9780&status=${status === 2 ? "danger" : status === 1 ? "warning" : "normal"}&key=${VWORLD_KEY}`}
-              style={{
-                width:"100%",
-                height:"100%",
-                border:"none",
-                display:"block",
-                borderRadius:8,
-              }}
+              src={mapSrc}
+              style={{ width:"100%", height:"100%", border:"none", display:"block", borderRadius:8 }}
             />
 
             <div
-              style={{
-                position:"absolute",
-                bottom:12,
-                left:12,
-                background:"rgba(10,20,40,.9)",
-                padding:"6px 10px",
-                borderRadius:6,
-                border:`1px solid ${C.bd}`,
-                fontSize:10,
-                color:C.t2,
-                cursor:"pointer",
-                transition:"border-color 0.2s",
-                zIndex:2
-              }}
+              style={{ position:"absolute", bottom:12, left:12, background:"rgba(10,20,40,.9)", padding:"6px 10px", borderRadius:6, border:`1px solid ${C.bd}`, fontSize:10, color:C.t2, cursor:"pointer", transition:"border-color 0.2s", zIndex:2 }}
               onMouseOver={e => e.currentTarget.style.borderColor = C.cyan}
               onMouseOut={e => e.currentTarget.style.borderColor = C.bd}
               onClick={() => setMapInfoModal(true)}
@@ -759,7 +931,6 @@ function MainScreen({ adminId, config, serverIP, onGoConfig, onLogout, onUpdateC
             </div>
           </div>
         </div>
-
       </div>
 
       {/* ── 푸터 ── */}
@@ -772,7 +943,7 @@ function MainScreen({ adminId, config, serverIP, onGoConfig, onLogout, onUpdateC
         </div>
       </div>
 
-      {/* ── 모달 팝업 영역 ── */}
+      {/* ── 모달 영역 ── */}
       {mentPopup && (
         <div style={modalOverlay}>
           <div style={{ background:C.card, padding:24, borderRadius:12, border:`1px solid ${C.bd2}`, width:300, textAlign:"center" }}>
@@ -794,20 +965,32 @@ function MainScreen({ adminId, config, serverIP, onGoConfig, onLogout, onUpdateC
 
       {zoneModal && (
         <div style={modalOverlay}>
-          <div style={{ background:C.card, padding:24, borderRadius:12, border:`1px solid ${C.bd2}`, width:360 }}>
+          <div style={{ background:C.card, padding:24, borderRadius:12, border:`1px solid ${C.bd2}`, width:420 }}>
             <div style={{ fontSize:16, fontWeight:800, marginBottom:16 }}>구역 선택 및 관리</div>
-            <div style={{ maxHeight:200, overflowY:"auto", marginBottom:16, border:`1px solid ${C.bd}`, borderRadius:6, padding:8 }}>
-              {zoneList.map(z => (
-                <div key={z} style={{ display:"flex", justifyContent:"space-between", alignItems:"center", padding:"8px", background:"rgba(255,255,255,.03)", marginBottom:4, borderRadius:4 }}>
-                  <span style={{ cursor:"pointer", flex:1, fontSize:12 }} onClick={() => { onUpdateConfig({...config, zone: z}); setMapAddr(z); setZoneModal(false); }}>{z}</span>
-                  <button style={{ background:"none", border:"none", color:C.red, cursor:"pointer", fontSize:10 }} onClick={() => setZoneList(p => p.filter(item => item !== z))}>삭제</button>
+
+            <div style={{ maxHeight:220, overflowY:"auto", marginBottom:16, border:`1px solid ${C.bd}`, borderRadius:6, padding:8 }}>
+              {zones.map(zone => (
+                <div
+                  key={zone.id}
+                  style={{ display:"flex", justifyContent:"space-between", alignItems:"center", padding:"8px", background: zone.id === selectedZoneId ? "rgba(34,211,238,.16)" : "rgba(255,255,255,.03)", marginBottom:4, borderRadius:4, border: zone.id === selectedZoneId ? `1px solid ${C.cyan}` : "1px solid transparent" }}
+                >
+                  <div style={{ cursor:"pointer", flex:1 }} onClick={() => { selectZone(zone); setZoneModal(false) }}>
+                    <div style={{ fontSize:12, fontWeight:800, color:C.t1 }}>{zone.name}</div>
+                    <div style={{ fontSize:9, color:C.t3, marginTop:2 }}>{zone.coord}</div>
+                    <div style={{ fontSize:9, color:C.t2, marginTop:1 }}>{zone.addr}</div>
+                  </div>
+                  <button style={{ background:"none", border:"none", color:C.red, cursor:"pointer", fontSize:10 }} onClick={() => deleteZone(zone.id)}>삭제</button>
                 </div>
               ))}
             </div>
-            <div style={{ display:"flex", gap:8 }}>
-              <input style={inputSt} value={newZoneName} onChange={e=>setNewZoneName(e.target.value)} placeholder="새 구역 추가" />
-              <button style={{...btnCyanSt, width:"auto", whiteSpace:"nowrap", padding:"0 12px"}} onClick={() => { if(newZoneName.trim()){ setZoneList(p=>[...p, newZoneName.trim()]); setNewZoneName(""); }}}>추가</button>
+
+            <div style={{ display:"flex", flexDirection:"column", gap:8 }}>
+              <input style={inputSt} value={newZoneName} onChange={e => setNewZoneName(e.target.value)} placeholder="새 구역명" />
+              <input style={inputSt} value={newZoneCoord} onChange={e => setNewZoneCoord(e.target.value)} placeholder="좌표 예: 37.5665° N, 126.9780° E" />
+              <input style={inputSt} value={newZoneAddr} onChange={e => setNewZoneAddr(e.target.value)} placeholder="주소 또는 설명" />
+              <button style={{...btnCyanSt, width:"100%"}} onClick={addZone}>추가</button>
             </div>
+
             <div style={{ textAlign:"right", marginTop:16 }}>
               <button style={{...btnCyanSt, width:"auto", background:C.bd, color:C.t1}} onClick={() => setZoneModal(false)}>닫기</button>
             </div>
@@ -828,64 +1011,53 @@ function MainScreen({ adminId, config, serverIP, onGoConfig, onLogout, onUpdateC
               <input style={inputSt} value={mapAddr} onChange={e=>setMapAddr(e.target.value)} />
             </div>
             <div style={{ display:"flex", gap:10 }}>
-              <button style={{...btnCyanSt, background:C.bd, color:C.t1}} onClick={() => setMapInfoModal(false)}>확인</button>
+              <button
+                style={{...btnCyanSt, background:C.bd, color:C.t1}}
+                onClick={() => {
+                  if (selectedZoneId) {
+                    setZones(prev => prev.map(z => z.id === selectedZoneId ? { ...z, coord: mapCoord, addr: mapAddr } : z))
+                  }
+                  setZoneModal(false)
+                  setMapInfoModal(false)
+                }}
+              >
+                확인
+              </button>
             </div>
           </div>
         </div>
       )}
 
-      {/* ── 알림 패널 (fixed 드롭다운) ── */}
+      {/* ── 알림 패널 ── */}
       {notifPanelOpen && (
         <>
-          {/* 바깥 클릭 닫기용 투명 레이어 */}
           <div style={{ position:"fixed", inset:0, zIndex:149 }} onClick={() => setNotifPanelOpen(false)} />
-          <div style={{
-            position:"fixed", top:48, right:10,
-            width:310, maxHeight:400,
-            background:C.card, border:`1px solid ${C.bd2}`,
-            borderRadius:10, zIndex:150,
-            display:"flex", flexDirection:"column",
-            boxShadow:"0 10px 40px rgba(0,0,0,.6)",
-            overflow:"hidden",
-          }}>
-            {/* 패널 헤더 */}
+          <div style={{ position:"fixed", top:48, right:10, width:310, maxHeight:400, background:C.card, border:`1px solid ${C.bd2}`, borderRadius:10, zIndex:150, display:"flex", flexDirection:"column", boxShadow:"0 10px 40px rgba(0,0,0,.6)", overflow:"hidden" }}>
             <div style={{ padding:"9px 14px", borderBottom:`1px solid ${C.bd}`, display:"flex", justifyContent:"space-between", alignItems:"center", flexShrink:0 }}>
               <span style={{ fontSize:12, fontWeight:800, color:C.t1 }}>🔔 다른 구역 알림</span>
               <div style={{ display:"flex", gap:4 }}>
                 {unreadCount > 0 && (
-                  <button style={{...tbtnSt, fontSize:10}} onClick={() => setNotifications(prev => prev.map(n => ({...n, read:true})))}>
-                    모두 읽음
-                  </button>
+                  <button style={{...tbtnSt, fontSize:10}} onClick={() => setNotifications(prev => prev.map(n => ({...n, read:true})))}>모두 읽음</button>
                 )}
                 <button style={{...tbtnSt, fontSize:11}} onClick={() => setNotifPanelOpen(false)}>✕</button>
               </div>
             </div>
-
-            {/* 알림 목록 */}
             <div style={{ overflowY:"auto", flex:1 }}>
               {notifications.length === 0 ? (
-                <div style={{ padding:"28px 16px", textAlign:"center", color:C.t3, fontSize:11 }}>
-                  다른 관리구역의 알림이 없습니다
-                </div>
+                <div style={{ padding:"28px 16px", textAlign:"center", color:C.t3, fontSize:11 }}>다른 관리구역의 알림이 없습니다</div>
               ) : (
                 notifications.map(n => (
                   <div
                     key={n.id}
-                    style={{
-                      padding:"10px 14px",
-                      borderBottom:`1px solid ${C.bd}`,
-                      cursor:"pointer",
-                      background: n.read ? "transparent" : "rgba(34,211,238,.04)",
-                      transition:"background .15s",
-                    }}
-                    onClick={() => switchToZone(n.zoneName)}
+                    style={{ padding:"10px 14px", borderBottom:`1px solid ${C.bd}`, cursor:"pointer", background: n.read ? "transparent" : "rgba(34,211,238,.04)", transition:"background .15s" }}
+                    onClick={() => switchToZone(n)}
                     onMouseOver={e => e.currentTarget.style.background="rgba(255,255,255,.05)"}
                     onMouseOut={e => e.currentTarget.style.background = n.read ? "transparent" : "rgba(34,211,238,.04)"}
                   >
                     <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:4 }}>
                       <div style={{ display:"flex", alignItems:"center", gap:6 }}>
                         <span style={{ fontSize:9, fontWeight:800, color: n.type===2 ? C.red : C.amber }}>
-                          {n.type===2 ? "⚠ 위험감지" : "! 무단침입"}
+                          {n.kind === "emergency" ? "⚠ 응급상황" : n.kind === "warn2" ? "! 2차 경고" : "! 1차 경고"}
                         </span>
                         <span style={{ fontSize:9, color:C.t3 }}>·</span>
                         <span style={{ fontSize:9, color:C.t2, fontWeight:700 }}>{n.zoneName}</span>
@@ -905,20 +1077,15 @@ function MainScreen({ adminId, config, serverIP, onGoConfig, onLogout, onUpdateC
         </>
       )}
 
-      {/* ── 설정 팝업 모달 ── */}
+      {/* ── 설정 모달 ── */}
       {settingsModal && (
         <div style={modalOverlay} onClick={e => e.target === e.currentTarget && setSettingsModal(false)}>
           <div style={{ background:C.card, borderRadius:12, border:`1px solid ${C.bd2}`, width:360, overflow:"hidden" }}>
-
-            {/* 모달 헤더 */}
             <div style={{ padding:"13px 18px", borderBottom:`1px solid ${C.bd}`, background:C.sf, display:"flex", justifyContent:"space-between", alignItems:"center" }}>
               <span style={{ fontSize:14, fontWeight:800 }}>⚙ 시스템 설정</span>
               <button style={tbtnSt} onClick={() => setSettingsModal(false)}>✕</button>
             </div>
-
             <div style={{ padding:"18px" }}>
-
-              {/* 현재 접속 IP */}
               <div style={{ marginBottom:16, padding:"12px 14px", background:"rgba(255,255,255,.025)", borderRadius:8, border:`1px solid ${C.bd}` }}>
                 <div style={{ fontSize:9, textTransform:"uppercase", letterSpacing:".12em", color:C.t3, fontWeight:700, marginBottom:6 }}>현재 접속 IP</div>
                 <div style={{ fontSize:13, fontWeight:700, fontFamily:"'Courier New',monospace", color:C.cyan, display:"flex", alignItems:"center", gap:8 }}>
@@ -926,39 +1093,25 @@ function MainScreen({ adminId, config, serverIP, onGoConfig, onLogout, onUpdateC
                   {serverIP}
                 </div>
               </div>
-
-              {/* 자가진단 */}
               <div style={{ marginBottom:16 }}>
                 <div style={{ fontSize:9, textTransform:"uppercase", letterSpacing:".12em", color:C.t3, fontWeight:700, marginBottom:8 }}>자가진단</div>
-                <button
-                  style={{ ...btnCyanSt, opacity:selfCheckRunning ? 0.65 : 1 }}
-                  onClick={runSelfCheck}
-                  disabled={selfCheckRunning}
-                >
+                <button style={{ ...btnCyanSt, opacity:selfCheckRunning ? 0.65 : 1 }} onClick={runSelfCheck} disabled={selfCheckRunning}>
                   {selfCheckRunning ? "🔍 진단 중..." : "🔍 자가진단 실행"}
                 </button>
-
                 {selfCheckResult && (
                   <div style={{ marginTop:10, background:"rgba(255,255,255,.02)", borderRadius:6, border:`1px solid ${C.bd}`, overflow:"hidden" }}>
                     {selfCheckResult.map(item => (
                       <div key={item.label} style={{ display:"flex", justifyContent:"space-between", alignItems:"center", padding:"7px 12px", borderBottom:`1px solid ${C.bd}` }}>
                         <span style={{ fontSize:11, color:C.t2 }}>{item.label}</span>
-                        <span style={{ fontSize:11, fontWeight:800, color: item.ok ? C.green : C.red }}>
-                          {item.ok ? "✓ 정상" : "✗ 오류"}
-                        </span>
+                        <span style={{ fontSize:11, fontWeight:800, color: item.ok ? C.green : C.red }}>{item.ok ? "✓ 정상" : "✗ 오류"}</span>
                       </div>
                     ))}
                     <div style={{ padding:"7px 12px", fontSize:10, color:C.green, fontWeight:700 }}>모든 항목 정상</div>
                   </div>
                 )}
               </div>
-
-              {/* 로그아웃 */}
               <div style={{ borderTop:`1px solid ${C.bd}`, paddingTop:14 }}>
-                <button
-                  style={{ ...btnCyanSt, background:"rgba(248,113,113,.08)", color:C.red, border:`1px solid rgba(248,113,113,.25)` }}
-                  onClick={() => { setSettingsModal(false); onLogout() }}
-                >
+                <button style={{ ...btnCyanSt, background:"rgba(248,113,113,.08)", color:C.red, border:`1px solid rgba(248,113,113,.25)` }} onClick={() => { setSettingsModal(false); onLogout() }}>
                   로그아웃
                 </button>
               </div>
@@ -967,33 +1120,14 @@ function MainScreen({ adminId, config, serverIP, onGoConfig, onLogout, onUpdateC
         </div>
       )}
 
-      {/* CSS 애니메이션 */}
       <style>{`
-        @keyframes ping {
-          75%, 100% { transform: scale(2); opacity: 0; }
-        }
+        @keyframes ping { 75%, 100% { transform: scale(2); opacity: 0; } }
         ::-webkit-scrollbar { width: 6px; height: 6px; }
         ::-webkit-scrollbar-track { background: transparent; }
         ::-webkit-scrollbar-thumb { background: rgba(255,255,255,.15); border-radius: 3px; }
         ::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,.3); }
         * { scrollbar-width: thin; scrollbar-color: rgba(255,255,255,.15) transparent; }
       `}</style>
-    </div>
-  )
-}
-
-/* ── 파형 아이콘 (순수 CSS) ─────────────────────────────── */
-const waveKf = `@keyframes wv { 0%,100%{opacity:.3;transform:scaleY(.6)} 50%{opacity:1;transform:scaleY(1)} }`
-if (typeof document !== "undefined") {
-  const s = document.createElement("style"); s.textContent = waveKf; document.head.appendChild(s)
-}
-function WaveIcon() {
-  const barBase = { width:2.5, borderRadius:2, background:C.cyan, display:"inline-block", animationName:"wv", animationDuration:".8s", animationIterationCount:"infinite", transformOrigin:"bottom" }
-  return (
-    <div style={{ display:"flex", alignItems:"flex-end", gap:2, height:14 }}>
-      {[[5,0],[10,.15],[14,.3],[8,.45]].map(([h, delay], i) => (
-        <div key={i} style={{ ...barBase, height:h, animationDelay:`${delay}s` }} />
-      ))}
     </div>
   )
 }
