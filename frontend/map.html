@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body, #map { width: 100%; height: 100%; overflow: hidden; }
+
+    /* 감시 지점 마커 */
+    .pulse-marker { position: relative; width: 40px; height: 40px; }
+    .pulse-marker .dot {
+      position: absolute; top: 50%; left: 50%;
+      transform: translate(-50%, -50%);
+      width: 12px; height: 12px;
+      background: #ef4444; border-radius: 50%;
+      border: 2px solid #fff;
+      box-shadow: 0 0 6px rgba(239,68,68,0.8);
+      z-index: 2;
+    }
+    .pulse-marker .ring {
+      position: absolute; top: 50%; left: 50%;
+      transform: translate(-50%, -50%);
+      width: 36px; height: 36px;
+      border-radius: 50%;
+      border: 2px solid rgba(239,68,68,0.5);
+      animation: ring-pulse 1.8s ease-out infinite;
+    }
+    @keyframes ring-pulse {
+      0%   { transform: translate(-50%,-50%) scale(0.4); opacity: 1; }
+      100% { transform: translate(-50%,-50%) scale(1.6); opacity: 0; }
+    }
+
+    /* Leaflet 팝업 스타일 */
+    .leaflet-popup-content-wrapper {
+      background: #1e293b; color: #e2e8f0;
+      border: 1px solid #334155; border-radius: 8px;
+      font-size: 0.78rem;
+    }
+    .leaflet-popup-tip { background: #1e293b; }
+    .leaflet-popup-close-button { color: #94a3b8 !important; }
+  </style>
+</head>
+<body>
+  <div id="map"></div>
+
+  <script>
+    var params = new URLSearchParams(window.location.search);
+
+    var LAT = parseFloat(params.get("lat")) || 37.5665;
+    var LON = parseFloat(params.get("lon")) || 126.9780;
+    var PLACE_NAME = params.get("name") || "관리구역 미지정";
+    var PLACE_ADDR = params.get("addr") || "관할 구역 주소 미상";
+    var STATUS = params.get("status") || "normal";
+    var VWORLD_KEY = params.get("key") || "";
+
+    var map = L.map('map', {
+      zoomControl: true,
+      attributionControl: true,
+    }).setView([LAT, LON], 16);
+
+    var base = 'https://api.vworld.kr/req/wmts/1.0.0/' + VWORLD_KEY;
+    L.tileLayer(base + '/midnight/{z}/{y}/{x}.png', { maxZoom: 19, attribution: '© VWorld' }).addTo(map); //야간
+    //L.tileLayer(base + '/Base/{z}/{y}/{x}.png',    { maxZoom: 19, attribution: '© VWorld' }).addTo(map); //기본
+    //L.tileLayer(base + '/gray/{z}/{y}/{x}.png',    { maxZoom: 19, attribution: '© VWorld' }).addTo(map); //흑백
+    //L.tileLayer(base + '/satellite/{z}/{y}/{x}.png',{ maxZoom: 19, attribution: '© VWorld' }).addTo(map); //위성
+    // L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    //     maxZoom: 19,
+    //     attribution: '© OpenStreetMap'
+    //   }).addTo(map);
+    // ── 감시 지점 마커 ────────────────────────────────────────────────────────
+    var pulseIcon = L.divIcon({
+      className: '',
+      html: '<div class="pulse-marker"><div class="ring"></div><div class="dot"></div></div>',
+      iconSize: [40, 40],
+      iconAnchor: [20, 20],
+      popupAnchor: [0, -20],
+    });
+
+      L.marker([LAT, LON], { icon: pulseIcon })
+    .addTo(map)
+    .bindPopup(
+      '📍 ' + PLACE_NAME +
+      '<br><small style="color:#94a3b8">' +
+      PLACE_ADDR + ' · ' + LAT + '° N, ' + LON + '° E</small>'
+    )
+    .openPopup();
+  </script>
+</body>
+</html>

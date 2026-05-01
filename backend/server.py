@@ -5,7 +5,8 @@ import asyncio
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-
+import time
+from dataclasses import replace
 from .config import settings
 from .app import SoundGuardApp
 
@@ -97,6 +98,9 @@ async def websocket_endpoint(websocket: WebSocket):
     try:
         print("🔄 [Server] AI 모델(BEATs, Whisper) 로딩 중...")
         guard_app = SoundGuardApp()
+        warn1_issued = False
+        warn2_issued = False
+        warn1_time = 0.0
         print("🚀 [Server] 모델 로딩 완료. 분석 루프 시작")
 
         while True:
@@ -139,7 +143,57 @@ async def websocket_endpoint(websocket: WebSocket):
                 dwell_seconds=dwell_seconds,
                 authorized=False,
             )
+            has_voice = bool((stt_text or "").strip())
 
+            if decision.situation == 0:
+                pass
+
+            elif decision.situation == 1:
+                now = time.time()
+
+                # 1차 경고가 아직 안 나간 경우
+                if not warn1_issued:
+                    decision = replace(
+                        decision,
+                        situation=1,
+                        situation_name="무단침입",
+                        reason="침입 신호 감지, 1차 경고 송출",
+                        action="1차 경고 방송 송출",
+                        tts_key="INTRUSION_WARN_1",
+                        send_to_control_room=True,
+                    )
+                    warn1_issued = True
+                    warn2_issued = False
+                    warn1_time = now
+
+                # 1차 경고 후 3분 이내에 음성이 추가 감지되면 2차 경고
+                elif warn1_issued and not warn2_issued and has_voice and (now - warn1_time <= 180):
+                    decision = replace(
+                        decision,
+                        situation=1,
+                        situation_name="무단침입",
+                        reason="1차 경고 이후 추가 음성 감지, 2차 경고 송출",
+                        action="2차 경고 방송 송출",
+                        tts_key="INTRUSION_WARN_2",
+                        send_to_control_room=True,
+                    )
+                    warn2_issued = True
+
+                # 2차까지 나갔으면 반복 송출 방지
+                else:
+                    decision = replace(
+                        decision,
+                        tts_key="NONE",
+                        action="감시 지속",
+                        send_to_control_room=False,
+                    )
+
+            elif decision.situation == 2:
+                warn1_issued = False
+                warn2_issued = False
+                warn1_time = 0.0
+            # 1차/2차 경고 순서 제어
+            
             tts_message = ""
             if decision.tts_key != "NONE":
                 tts_message = custom_tts.get(decision.tts_key) or DEFAULT_TTS_MESSAGES.get(decision.tts_key, "")
