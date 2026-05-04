@@ -1,0 +1,414 @@
+"""
+server.py - Oracle Cloud 서버에서 실행
+
+역할:
+  - /sensor  WebSocket: 현장 sensor.py로부터 오디오 수신 → AI 분석
+  - /ws      WebSocket: 대시보드 브라우저에 분석 결과 전송
+  - /api/zone-alert REST: 다른 구역 이벤트 수신 → 전체 대시보드 브로드캐스트
+
+실행:
+  python -m uvicorn server:app --host 0.0.0.0 --port 8000
+"""
+
+import sys
+import asyncio
+import json
+import time
+import tempfile
+from datetime import datetime
+from dataclasses import replace
+from pathlib import Path
+
+import numpy as np
+
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Body
+from fastapi.middleware.cors import CORSMiddleware
+
+# 현재 폴더(backend_on_server) 모듈 참조
+_cur = Path(__file__).resolve().parent
+sys.path.insert(0, str(_cur))
+sys.path.insert(0, str(_cur / "BEATs"))
+
+from config import settings
+from environmental_sound import BeatsEnvironmentClassifier, SoundEvent
+from stt import WhisperAPI
+from decision import GPTDecisionEngine, DecisionResult
+from output import EventLoggerAndMessenger
+
+# ── FastAPI 앱 ────────────────────────────────────────────────────
+app = FastAPI()
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# ── 공유 AI 모델 (서버 시작 시 1회만 로드) ───────────────────────
+class SharedAI:
+    def __init__(self):
+        print("🔄 [Server] AI 모델 로딩 중...")
+        print(f"📦 [Server] 사용 모델: {settings.beats_checkpoint_path}")
+        self.env_classifier = BeatsEnvironmentClassifier()
+        try:
+            self.stt = WhisperAPI()
+        except Exception as exc:
+            print(f"[WARN] STT 비활성화: {exc}")
+            self.stt = None
+        self.decision_engine = GPTDecisionEngine()
+        self.logger = EventLoggerAndMessenger()
+        print("✅ [Server] AI 모델 로딩 완료")
+
+ai: SharedAI | None = None
+
+
+@app.on_event("startup")
+async def startup():
+    global ai
+    ai = SharedAI()
+
+
+# ── 연결 관리 ─────────────────────────────────────────────────────
+DASHBOARD_CLIENTS: set[WebSocket] = set()
+
+# 구역별 상태
+ZONE_STATES: dict[str, dict] = {}
+
+EMERGENCY_KEYWORDS = [
+    "아파", "아파요", "아프다", "도와", "도와줘", "도와주세요",
+    "살려", "살려줘", "살려주세요", "119", "구조", "구해주세요",
+    "불났", "불이야", "쓰러", "쓰러졌", "다쳤", "다쳐", "갇혔",
+    "위험", "넘어졌", "죽겠",
+]
+
+DEFAULT_TTS_MESSAGES = {
+    "NONE": "",
+    "INTRUSION_WARN_1": "출입이 허가되지 않은 위험 구역입니다. 즉시 안전한 곳으로 이동해 주세요.",
+    "INTRUSION_WARN_2": "위험 구역에 계속 머무르고 있습니다. 위치 정보가 상황실로 전송되었습니다. 즉시 퇴장해 주세요.",
+    "EMERGENCY_GUIDE": "응급 상황이 감지되었습니다. 가능한 경우 안전한 위치로 이동하고 구조 안내를 기다려 주세요.",
+    "EVACUATION_GUIDE": "위험 상황이 감지되었습니다. 즉시 현재 위치에서 벗어나 안전한 곳으로 대피해 주세요.",
+}
+
+
+def get_zone_state(zone_id: str) -> dict:
+    return ZONE_STATES.setdefault(zone_id or "default", {
+        "warn1_issued": False,
+        "warn2_issued": False,
+        "warn1_time": 0.0,
+        "silence_cycles": 0,
+        "emergency_until": 0.0,
+        "emergency_count": 0,
+    })
+
+
+def normalize_text(text: str) -> str:
+    return (text or "").replace(" ", "").replace(".", "").replace("!", "").replace("?", "")
+
+
+def make_beats_scores(sound_event, decision) -> dict:
+    top_dict = dict(getattr(sound_event, "top_labels", []) or [])
+    if top_dict:
+        return {k: int(top_dict.get(k, 0) * 100)
+                for k in ("background", "loud_noise", "intrusion", "emergency", "impact_noise")}
+    raw = getattr(sound_event, "raw_label", "")
+    return {
+        "background":   90 if decision.situation == 0 else 5,
+        "loud_noise":   80 if raw == "loud_noise" else 0,
+        "intrusion":    80 if decision.situation == 1 else 0,
+        "emergency":    80 if decision.situation == 2 else 0,
+        "impact_noise": 80 if raw == "impact_noise" else 0,
+    }
+
+
+async def broadcast(payload: dict):
+    dead = []
+    for client in list(DASHBOARD_CLIENTS):
+        try:
+            await client.send_json(payload)
+        except Exception:
+            dead.append(client)
+    for c in dead:
+        DASHBOARD_CLIENTS.discard(c)
+
+
+# ── /api/zone-alert ───────────────────────────────────────────────
+@app.post("/api/zone-alert")
+async def receive_zone_alert(payload: dict = Body(...)):
+    """다른 구역 감지 시스템이 호출하는 알림 수신 API."""
+    kind = payload.get("kind") or "warn1"
+    event = {
+        "type": "zone_alert",
+        "timestamp": payload.get("timestamp") or datetime.now().strftime("%H:%M:%S"),
+        "zone_id":   payload.get("zone_id")   or "external-zone",
+        "zone_name": payload.get("zone_name") or "다른 구역",
+        "coord":     payload.get("coord")     or "",
+        "addr":      payload.get("addr")      or "",
+        "kind":      kind,
+        "situation": payload.get("situation", 2 if kind == "emergency" else 1),
+        "tts_key":   payload.get("tts_key") or (
+            "EMERGENCY_GUIDE"   if kind == "emergency" else
+            "INTRUSION_WARN_2"  if kind == "warn2"     else
+            "INTRUSION_WARN_1"
+        ),
+        "message": payload.get("message") or (
+            "응급 안내 방송 송출" if kind == "emergency" else
+            "2차 경고 방송 송출" if kind == "warn2"     else
+            "1차 경고 방송 송출"
+        ),
+    }
+    await broadcast(event)
+    return {"ok": True, "broadcasted": len(DASHBOARD_CLIENTS)}
+
+
+# ── /ws (대시보드) ────────────────────────────────────────────────
+@app.websocket("/ws")
+async def dashboard_endpoint(websocket: WebSocket):
+    await websocket.accept()
+    DASHBOARD_CLIENTS.add(websocket)
+    print("✅ [Dashboard] 대시보드 연결됨")
+
+    custom_tts: dict[str, str] = {}
+
+    try:
+        async for raw in websocket.iter_json():
+            msg_type = raw.get("type")
+
+            if msg_type == "tts_config":
+                custom_tts.update({
+                    "INTRUSION_WARN_1": raw.get("w1", "") or "",
+                    "INTRUSION_WARN_2": raw.get("w2", "") or "",
+                    "EMERGENCY_GUIDE":  raw.get("emg", "") or "",
+                    "EVACUATION_GUIDE": raw.get("emg", "") or "",
+                })
+
+            elif msg_type == "pause":
+                # 대시보드 일시정지 → 모든 sensor에 전달 (추후 확장)
+                await websocket.send_json({"type": "pause_state", "paused": raw.get("paused", False)})
+
+            elif msg_type == "self_check":
+                await websocket.send_json({
+                    "type": "self_check_result",
+                    "items": [
+                        {"label": "BEATs 모델",  "ok": ai is not None},
+                        {"label": "STT 엔진",    "ok": ai is not None and ai.stt is not None},
+                        {"label": "서버 연결",   "ok": True},
+                        {"label": "로그 시스템", "ok": ai is not None},
+                    ],
+                })
+
+    except WebSocketDisconnect:
+        pass
+    finally:
+        DASHBOARD_CLIENTS.discard(websocket)
+        print("🔌 [Dashboard] 대시보드 연결 종료")
+
+
+# ── /sensor (현장 sensor.py) ──────────────────────────────────────
+@app.websocket("/sensor")
+async def sensor_endpoint(websocket: WebSocket):
+    await websocket.accept()
+    print("🎤 [Sensor] 센서 연결됨")
+
+    zone_info: dict = {
+        "zone_id":       "default",
+        "zone_name":     "관리구역 미지정",
+        "coord":         "",
+        "addr":          "",
+        "sample_rate":   settings.sample_rate,
+        "chunk_seconds": settings.chunk_seconds,
+    }
+    paused = False
+
+    try:
+        # 첫 메시지: zone_info JSON 수신
+        first = await websocket.receive_text()
+        meta = json.loads(first)
+        if meta.get("type") == "zone_info":
+            zone_info.update({k: meta[k] for k in meta if k != "type"})
+            print(
+                f"[Sensor] 구역 등록: {zone_info['zone_name']} ({zone_info['zone_id']}) "
+                f"| {zone_info['sample_rate']}Hz / {zone_info['chunk_seconds']}s"
+            )
+
+        sample_rate   = int(zone_info.get("sample_rate",   settings.sample_rate))
+        zone_id       = zone_info["zone_id"]
+        zone_state    = get_zone_state(zone_id)
+        tmp_path      = Path(tempfile.gettempdir()) / f"sensor_{zone_id}.wav"
+
+        # 분석 루프
+        while True:
+            # JSON 명령 처리 (non-blocking)
+            try:
+                raw = await asyncio.wait_for(websocket.receive(), timeout=0.01)
+                if raw["type"] == "websocket.receive":
+                    if "text" in raw and raw["text"]:
+                        msg = json.loads(raw["text"])
+                        if msg.get("type") == "pause":
+                            paused = msg.get("paused", False)
+                            print(f"[Sensor:{zone_id}] 감지 {'일시정지' if paused else '재개'}")
+                            await websocket.send_text(json.dumps({"type": "pause", "paused": paused}))
+                    elif "bytes" in raw and raw["bytes"]:
+                        audio_bytes = raw["bytes"]
+                        await _process_audio(
+                            audio_bytes, sample_rate, zone_info, zone_state, tmp_path
+                        )
+            except asyncio.TimeoutError:
+                pass
+
+    except WebSocketDisconnect:
+        pass
+    except Exception as exc:
+        print(f"[Sensor] 오류: {exc}")
+    finally:
+        print(f"🔌 [Sensor] 센서 연결 종료: {zone_info['zone_name']}")
+
+
+async def _process_audio(
+    audio_bytes: bytes,
+    sample_rate: int,
+    zone_info: dict,
+    zone_state: dict,
+    tmp_path: Path,
+):
+    """오디오 bytes → AI 분석 → 대시보드 전송"""
+    import soundfile as sf
+
+    zone_id   = zone_info["zone_id"]
+    zone_name = zone_info["zone_name"]
+    now       = time.time()
+
+    # bytes → numpy
+    audio = np.frombuffer(audio_bytes, dtype=np.float32)
+
+    # 임시 wav 저장 (STT용)
+    sf.write(tmp_path, audio, sample_rate)
+
+    # ── BEATs 분류 ──
+    sound_event = ai.env_classifier.classify(audio, sample_rate)
+
+    # ── Whisper STT ──
+    stt_text = ""
+    stt_trigger = (
+        sound_event.situation in {1, 2}
+        or getattr(sound_event, "rms",  0.0) >= settings.min_rms_for_stt
+        or getattr(sound_event, "peak", 0.0) >= settings.min_peak_for_stt
+    )
+    if ai.stt and stt_trigger:
+        try:
+            if ai.stt.should_transcribe(audio):
+                stt_text = ai.stt.transcribe(tmp_path) or ""
+        except Exception as exc:
+            print(f"[STT] 실패: {exc}")
+
+    # ── DwellTracker ──
+    if sound_event.situation in {1, 2}:
+        if zone_state.get("detected_since") is None:
+            zone_state["detected_since"] = now
+        dwell_seconds = now - zone_state["detected_since"]
+    else:
+        zone_state["detected_since"] = None
+        dwell_seconds = 0.0
+
+    # ── GPT 판단 ──
+    decision = ai.decision_engine.decide(
+        sound_event=sound_event,
+        stt_text=stt_text,
+        dwell_seconds=dwell_seconds,
+        authorized=False,
+    )
+
+    # ── 구역별 경고/응급 상태 관리 ──
+    has_voice       = bool((stt_text or "").strip())
+    compact_text    = normalize_text(stt_text)
+    has_emg_keyword = any(kw in compact_text for kw in EMERGENCY_KEYWORDS)
+    raw_label       = str(getattr(sound_event, "raw_label", "") or "")
+    confidence      = float(getattr(sound_event, "confidence", 0.0) or 0.0)
+
+    raw_emergency = raw_label == "emergency" and confidence >= 0.80
+    zone_state["emergency_count"] = (zone_state.get("emergency_count", 0) + 1) if raw_emergency else 0
+    confirmed_emergency = has_emg_keyword or zone_state["emergency_count"] >= 2
+
+    if now < zone_state.get("emergency_until", 0.0) and decision.situation != 2:
+        decision = replace(decision, situation=2, situation_name="위험 감지",
+                           risk_level="high", tts_key="NONE",
+                           reason="응급 상황 감지 후 3분 보호 모드 유지",
+                           send_to_control_room=True)
+
+    elif decision.situation == 2 and confirmed_emergency:
+        zone_state["emergency_until"] = now + 180
+        zone_state["warn1_issued"]    = False
+        zone_state["warn2_issued"]    = False
+        zone_state["warn1_time"]      = 0.0
+        zone_state["silence_cycles"]  = 0
+        if decision.tts_key == "NONE":
+            decision = replace(decision, tts_key="EMERGENCY_GUIDE", send_to_control_room=True)
+
+    elif decision.situation == 2 and not confirmed_emergency:
+        decision = replace(decision, situation=1, situation_name="무단침입",
+                           risk_level="medium", tts_key="INTRUSION_WARN_1",
+                           send_to_control_room=True, emergency_candidate=False)
+
+    if decision.situation == 1:
+        zone_state["silence_cycles"] = 0
+        if not zone_state.get("warn1_issued") or (now - zone_state.get("warn1_time", 0.0) > 180):
+            decision = replace(decision, tts_key="INTRUSION_WARN_1",
+                               action="1차 경고 방송 송출")
+            zone_state.update({"warn1_issued": True, "warn2_issued": False, "warn1_time": now})
+        elif zone_state.get("warn1_issued") and not zone_state.get("warn2_issued") and has_voice:
+            decision = replace(decision, tts_key="INTRUSION_WARN_2",
+                               action="2차 경고 방송 송출")
+            zone_state["warn2_issued"] = True
+        else:
+            decision = replace(decision, tts_key="NONE", action="감시 지속", send_to_control_room=False)
+
+    elif decision.situation == 0:
+        zone_state["silence_cycles"] = zone_state.get("silence_cycles", 0) + 1
+        if zone_state["silence_cycles"] >= 6:
+            zone_state.update({"warn1_issued": False, "warn2_issued": False,
+                               "warn1_time": 0.0, "silence_cycles": 0})
+
+    elif decision.situation == 2:
+        zone_state.update({"warn1_issued": False, "warn2_issued": False,
+                           "warn1_time": 0.0, "silence_cycles": 0})
+
+    tts_message = DEFAULT_TTS_MESSAGES.get(decision.tts_key, "") if decision.tts_key != "NONE" else ""
+
+    # ── 대시보드 전송 ──
+    payload = {
+        "type":              "analysis",
+        "timestamp":         datetime.now().strftime("%H:%M:%S"),
+        "situation":         decision.situation,
+        "situation_name":    decision.situation_name,
+        "risk_level":        decision.risk_level,
+        "reason":            decision.reason,
+        "action":            decision.action,
+        "tts_key":           decision.tts_key,
+        "tts_message":       tts_message,
+        "beats_label":       sound_event.label,
+        "beats_raw_label":   sound_event.raw_label,
+        "beats_confidence":  sound_event.confidence,
+        "rms":               sound_event.rms,
+        "peak":              sound_event.peak,
+        "stt_text":          stt_text,
+        "dwell_seconds":     dwell_seconds,
+        "beats":             make_beats_scores(sound_event, decision),
+        "zone_id":           zone_id,
+        "zone_name":         zone_name,
+        "coord":             zone_info.get("coord", ""),
+        "addr":              zone_info.get("addr", ""),
+    }
+
+    await broadcast(payload)
+
+    print(
+        f"📡 [{zone_name}] BEATs={sound_event.raw_label}/{sound_event.label}"
+        f"({sound_event.confidence:.2f}) | Final={decision.situation_name}"
+        f" | TTS={decision.tts_key} | STT={stt_text or '없음'}"
+    )
+
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run("server:app", host="0.0.0.0", port=8000, reload=False)

@@ -71,21 +71,21 @@ backend/assets/tts/
 backend/beats/Evaluation_Results/
 backend/reference/
 
-#frontend
-frontend/node_modules/
-
-# transfer learning outputs
-transfer_learning/outputs/
 # --- frontend ---
 frontend/node_modules/
 frontend/.pnp
 frontend/.pnp.js
 frontend/coverage/
 frontend/build/
+frontend/.env
 frontend/.env.local
+frontend/.env.production
 frontend/.env.development.local
 frontend/.env.test.local
 frontend/.env.production.local
 frontend/npm-debug.log*
 frontend/yarn-debug.log*
 frontend/yarn-error.log*
+
+# transfer learning outputs
+transfer_learning/outputs/
