@@ -24,8 +24,9 @@ from pathlib import Path
 
 import numpy as np
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Body, Depends, Query, HTTPException
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Body, Depends, Query, HTTPException, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from sqlalchemy.orm import Session
 
 # 현재 폴더(backend_on_server) 모듈 참조
@@ -53,6 +54,17 @@ app.add_middleware(
 )
 
 init_db()
+
+# 핸드폰 센서 앱 관련 설정
+SERVER_PUBLIC_URL = os.getenv("SERVER_PUBLIC_URL", "http://168.107.31.37:8000")
+
+_tts_dir      = BACKEND_DIR / "assets/tts"
+_received_dir = BACKEND_DIR / "received"
+_tts_dir.mkdir(parents=True, exist_ok=True)
+_received_dir.mkdir(parents=True, exist_ok=True)
+
+# 대시보드에서 생성한 안내방송 .mp3 를 핸드폰에서 다운로드 가능하게 노출
+app.mount("/tts", StaticFiles(directory=str(_tts_dir)), name="tts")
 
 
 # ── 구역 CRUD API ─────────────────────────────────────────────────
@@ -509,6 +521,56 @@ async def _process_audio(
         f"({sound_event.confidence:.2f}) | Final={decision.situation_name}"
         f" | TTS={decision.tts_key} | STT={stt_text or '없음'}"
     )
+
+    return decision
+
+
+# ── /upload (핸드폰 센서 앱) ──────────────────────────────────────
+@app.post("/upload")
+async def upload_audio(file: UploadFile = File(...), device_id: str = Form(...)):
+    """
+    핸드폰 센서 앱에서 녹음 WAV 파일을 받아 AI 분석 후 안내방송 .mp3 URL 반환.
+
+    반환값:
+      - announcement_url: 재생할 .mp3 URL (위험 없음이면 빈 문자열 "")
+    """
+    import soundfile as sf
+
+    # WAV 저장
+    content = await file.read()
+    received_path = _received_dir / file.filename
+    received_path.write_bytes(content)
+
+    # WAV → numpy float32 (sensor WebSocket과 동일 포맷으로 변환)
+    audio_np, sample_rate = sf.read(received_path)
+    if audio_np.ndim > 1:
+        audio_np = audio_np[:, 0]
+    audio_np = audio_np.astype(np.float32)
+
+    tmp_path   = Path(tempfile.gettempdir()) / f"upload_{device_id}.wav"
+    sf.write(tmp_path, audio_np, sample_rate)
+
+    zone_info  = {
+        "zone_id":   device_id,
+        "zone_name": f"핸드폰 센서 ({device_id})",
+        "coord": "",
+        "addr":  "",
+    }
+    zone_state = get_zone_state(device_id)
+
+    # AI 분석 + 대시보드 브로드캐스트
+    decision = await _process_audio(
+        audio_np.tobytes(), sample_rate, zone_info, zone_state, tmp_path
+    )
+
+    # tts_key → .mp3 URL
+    announcement_url = ""
+    if decision and decision.tts_key not in ("NONE", None, ""):
+        mp3_path = _tts_dir / f"{decision.tts_key}.mp3"
+        if mp3_path.exists():
+            announcement_url = f"{SERVER_PUBLIC_URL}/tts/{decision.tts_key}.mp3"
+
+    return {"status": "success", "announcement_url": announcement_url}
 
 
 if __name__ == "__main__":
