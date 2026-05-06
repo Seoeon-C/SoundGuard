@@ -8,18 +8,20 @@ from config import settings
 
 
 SUBTITLE_HALLUCINATION_PHRASES = [
-    "시청해주셔서 감사합니다",
-    "시청해 주셔서 감사합니다",
+    "시청해주셔서감사합니다",
     "구독해주세요",
-    "구독해 주세요",
-    "좋아요와 구독",
-    "구독과 좋아요",
-    "좋아요 부탁드려요",
-    "구독과 좋아요 부탁드려요",
-    "다음 영상에서 만나요",
+    "좋아요와구독",
+    "구독과좋아요",
+    "좋아요부탁드려요",
+    "다음영상에서만나요",
     "감사합니다",
-    "네 감사합니다",
-    "여러분 감사합니다",
+    "네감사합니다",
+    "여러분감사합니다",
+    "오늘도시청해주셔서감사합니다",
+    "MBC뉴스",
+    "KBS뉴스",
+    "SBS뉴스",
+    "자막제공",
 ]
 
 
@@ -66,14 +68,14 @@ class WhisperAPI:
         if any(k in compact for k in emergency_keywords):
             return text
 
-        # 완전 일치만 환각으로 처리 (부분 포함은 허용)
+        # 환각 문구가 텍스트에 포함되어 있으면 무시 (앞에 "오늘도" 등이 붙어도 차단)
         hallucination_compacts = [
             phrase.replace(" ", "").replace(".", "").replace("!", "").replace("?", "")
             for phrase in SUBTITLE_HALLUCINATION_PHRASES
         ]
 
         for phrase in hallucination_compacts:
-            if compact == phrase:
+            if phrase in compact:
                 print(f"[STT] 자막형 환각 문구로 판단하여 무시: {text}")
                 return ""
 
