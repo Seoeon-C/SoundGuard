@@ -74,6 +74,18 @@ def create_zone(body: dict = Body(...), db: Session = Depends(get_db)):
     return {"id": zone.id, "name": zone.name, "label": zone.label, "coord": zone.coord}
 
 
+@app.put("/api/zones/{zone_id}")
+def update_zone(zone_id: str, body: dict = Body(...), db: Session = Depends(get_db)):
+    zone = db.query(Zone).filter(Zone.id == zone_id).first()
+    if not zone:
+        raise HTTPException(status_code=404, detail="구역을 찾을 수 없습니다.")
+    if "name"  in body: zone.name  = body["name"]
+    if "label" in body: zone.label = body["label"]
+    if "coord" in body: zone.coord = body["coord"]
+    db.commit()
+    return {"id": zone.id, "name": zone.name, "label": zone.label, "coord": zone.coord}
+
+
 @app.delete("/api/zones/{zone_id}")
 def delete_zone(zone_id: str, db: Session = Depends(get_db)):
     zone = db.query(Zone).filter(Zone.id == zone_id).first()

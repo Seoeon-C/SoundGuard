@@ -426,6 +426,35 @@ function MainScreen({ adminId, config, serverIP, onGoConfig, onLogout, onUpdateC
     setNewZoneLabel("산")
   }
 
+  const [editingZoneId, setEditingZoneId] = useState(null)
+  const [editName, setEditName]   = useState("")
+  const [editLabel, setEditLabel] = useState("산")
+  const [editCoord, setEditCoord] = useState("")
+
+  const startEditZone = (zone) => {
+    setEditingZoneId(zone.id)
+    setEditName(zone.name)
+    setEditLabel(zone.label || "산")
+    setEditCoord(zone.coord || "")
+  }
+
+  const saveEditZone = () => {
+    if (!editingZoneId || !editName.trim()) return
+    const updated = { name: editName.trim(), label: editLabel, coord: editCoord.trim() }
+    fetch(`${API_BASE}/api/zones/${editingZoneId}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(updated),
+    }).catch(() => {})
+    setZones(prev => prev.map(z => z.id === editingZoneId ? { ...z, ...updated } : z))
+    if (selectedZoneId === editingZoneId) {
+      onUpdateConfig({ ...configRef.current, zone: updated.name })
+      setMapCoord(updated.coord || mapCoord)
+      setMapAddr(editLabel)
+    }
+    setEditingZoneId(null)
+  }
+
   const deleteZone = (id) => {
     fetch(`${API_BASE}/api/zones/${id}`, { method: "DELETE" }).catch(() => {})
 
@@ -1317,16 +1346,32 @@ function MainScreen({ adminId, config, serverIP, onGoConfig, onLogout, onUpdateC
                 <div style={{ padding:"16px", textAlign:"center", color:C.t3, fontSize:11 }}>등록된 구역이 없습니다</div>
               )}
               {zones.map(zone => (
-                <div
-                  key={zone.id}
-                  style={{ display:"flex", justifyContent:"space-between", alignItems:"center", padding:"8px", background: zone.id === selectedZoneId ? "rgba(34,211,238,.16)" : "rgba(255,255,255,.03)", marginBottom:4, borderRadius:4, border: zone.id === selectedZoneId ? `1px solid ${C.cyan}` : "1px solid transparent" }}
-                >
-                  <div style={{ cursor:"pointer", flex:1 }} onClick={() => { selectZone(zone); setZoneModal(false) }}>
-                    <div style={{ fontSize:12, fontWeight:800, color:C.t1 }}>{zone.name}</div>
-                    <div style={{ fontSize:9, color:C.t3, marginTop:2 }}>{zone.coord}</div>
-                    <div style={{ fontSize:9, color:C.cyan, marginTop:1, fontWeight:700 }}>{zone.label || "미분류"}</div>
-                  </div>
-                  <button style={{ background:"none", border:"none", color:C.red, cursor:"pointer", fontSize:10 }} onClick={() => deleteZone(zone.id)}>삭제</button>
+                <div key={zone.id} style={{ marginBottom:4 }}>
+                  {editingZoneId === zone.id ? (
+                    <div style={{ background:"rgba(34,211,238,.07)", border:`1px solid ${C.cyan}`, borderRadius:6, padding:10, display:"flex", flexDirection:"column", gap:6 }}>
+                      <input style={{...inputSt, fontSize:11, padding:"6px 10px"}} value={editName} onChange={e=>setEditName(e.target.value)} placeholder="구역명" />
+                      <input style={{...inputSt, fontSize:11, padding:"6px 10px"}} value={editCoord} onChange={e=>setEditCoord(e.target.value)} placeholder="좌표 예: 37.5665, 126.9780" />
+                      <select style={{...inputSt, fontSize:11, padding:"6px 10px", cursor:"pointer"}} value={editLabel} onChange={e=>setEditLabel(e.target.value)}>
+                        {ZONE_LABELS.map(l => <option key={l} value={l}>{l}</option>)}
+                      </select>
+                      <div style={{ display:"flex", gap:6 }}>
+                        <button style={{...btnCyanSt, padding:"6px 12px", fontSize:11, flex:1}} onClick={saveEditZone}>저장</button>
+                        <button style={{...tbtnSt, fontSize:11, border:`1px solid ${C.bd}`, borderRadius:5, padding:"6px 12px"}} onClick={()=>setEditingZoneId(null)}>취소</button>
+                      </div>
+                    </div>
+                  ) : (
+                    <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", padding:"8px", background: zone.id === selectedZoneId ? "rgba(34,211,238,.16)" : "rgba(255,255,255,.03)", borderRadius:4, border: zone.id === selectedZoneId ? `1px solid ${C.cyan}` : "1px solid transparent" }}>
+                      <div style={{ cursor:"pointer", flex:1 }} onClick={() => { selectZone(zone); setZoneModal(false) }}>
+                        <div style={{ fontSize:12, fontWeight:800, color:C.t1 }}>{zone.name}</div>
+                        <div style={{ fontSize:9, color:C.t3, marginTop:2 }}>{zone.coord}</div>
+                        <div style={{ fontSize:9, color:C.cyan, marginTop:1, fontWeight:700 }}>{zone.label || "미분류"}</div>
+                      </div>
+                      <div style={{ display:"flex", gap:4 }}>
+                        <button style={{ background:"none", border:"none", color:C.t2, cursor:"pointer", fontSize:10 }} onClick={() => startEditZone(zone)}>수정</button>
+                        <button style={{ background:"none", border:"none", color:C.red, cursor:"pointer", fontSize:10 }} onClick={() => deleteZone(zone.id)}>삭제</button>
+                      </div>
+                    </div>
+                  )}
                 </div>
               ))}
             </div>
