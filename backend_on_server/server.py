@@ -581,15 +581,10 @@ async def _process_audio(
 
 # ── /upload (핸드폰 센서 앱) ──────────────────────────────────────
 @app.post("/upload")
-async def upload_audio(
-    file: UploadFile = File(...),
-    device_id: str = Form(...),
-    db: Session = Depends(get_db),
-):
+async def upload_audio(file: UploadFile = File(...), device_id: str = Form(...)):
     """
     핸드폰 센서 앱에서 녹음 WAV 파일을 받아 AI 분석 후 안내방송 .mp3 URL 반환.
 
-    device_id 형식: "{zone_id}_phone01"
     반환값:
       - announcement_url: 재생할 .mp3 URL (위험 없음이면 빈 문자열 "")
     """
@@ -597,13 +592,6 @@ async def upload_audio(
         return {"status": "paused", "announcement_url": ""}
 
     import soundfile as sf
-
-    # device_id에서 zone_id 파싱: "{zone_id}_phone01" → zone_id
-    parts = device_id.rsplit('_', 1)
-    zone_id_str = parts[0] if len(parts) == 2 and parts[1].startswith('phone') else device_id
-
-    # DB에서 구역 정보 조회
-    zone_db = db.query(Zone).filter(Zone.id == zone_id_str).first()
 
     # WAV 저장
     content = await file.read()
@@ -616,14 +604,14 @@ async def upload_audio(
         audio_np = audio_np[:, 0]
     audio_np = audio_np.astype(np.float32)
 
-    tmp_path = Path(tempfile.gettempdir()) / f"upload_{device_id}.wav"
+    tmp_path   = Path(tempfile.gettempdir()) / f"upload_{device_id}.wav"
     sf.write(tmp_path, audio_np, sample_rate)
 
-    zone_info = {
+    zone_info  = {
         "zone_id":   device_id,
-        "zone_name": zone_db.name if zone_db else f"핸드폰 센서 ({device_id})",
-        "coord":     zone_db.coord if zone_db else "",
-        "addr":      "",
+        "zone_name": f"핸드폰 센서 ({device_id})",
+        "coord": "",
+        "addr":  "",
     }
     zone_state = get_zone_state(device_id)
 
@@ -639,7 +627,7 @@ async def upload_audio(
         if mp3_path.exists():
             announcement_url = f"{SERVER_PUBLIC_URL}/tts/{decision.tts_key}.mp3"
 
-    print(f"[UPLOAD] zone={zone_info['zone_name']} tts_key={decision.tts_key if decision else 'None'} → url={announcement_url or '(없음)'}")
+    print(f"[UPLOAD] tts_key={decision.tts_key if decision else 'None'} → url={announcement_url or '(없음)'}")
     return {"status": "success", "announcement_url": announcement_url}
 
 
