@@ -24,6 +24,17 @@ const LOG_COLORS = {
   voice:{ c:C.violet, label:"음성" },
 }
 
+const SOUND_LABEL_TEXT = {
+  background: "배경음",
+  speech: "사람 목소리",
+  footsteps: "발소리",
+  interaction: "문소리",
+  impact_noise: "충격음",
+  emergency: "응급음",
+  low_volume: "작은 소리",
+  empty: "무음",
+}
+
 const DEFAULT_MSGS = {
   w1: "무단 침입이 감지되었습니다. 즉시 퇴거하지 않을 시 관계기관에 신고 조치됩니다.",
   w2: "귀하의 위치 정보가 관계기관에 전송되었습니다. 즉시 이 구역을 이탈하십시오.",
@@ -287,7 +298,7 @@ function MainScreen({ adminId, config, serverIP, onGoConfig, onLogout, onUpdateC
   const [detected, setDetected] = useState(false)
   const [elapsed,  setElapsed]  = useState(0)
   const [personEl, setPersonEl] = useState(0)
-  const [beats,    setBeats]    = useState({ background:99, speech:0, footsteps:0, interaction:0, impact_noise:0 })
+  const [beats,    setBeats]    = useState({ background:99, speech:0, footsteps:0, interaction:0, impact_noise:0, emergency:0 })
   const [beatsTs,  setBeatsTs]  = useState("—")
   const [lastSnd,  setLastSnd]  = useState("—")
   const [curMsg,   setCurMsg]   = useState(null)
@@ -648,18 +659,30 @@ function MainScreen({ adminId, config, serverIP, onGoConfig, onLogout, onUpdateC
         const situation = Number(data.situation ?? 0)
         setStatus(situation)
         setBeatsTs(data.timestamp || nowStr())
-        setBeats(data.beats || {
+        const fallbackBeats = {
           background:   situation === 0 ? 90 : 5,
           speech:       0,
           footsteps:    0,
           interaction:  0,
           impact_noise: situation === 2 ? 80 : 0,
+          emergency:    0,
+        }
+        const nextBeats = data.beats || fallbackBeats
+        const emergencyActive = Boolean(
+          data.emergency_voice_confirmed ||
+          (situation === 2 && data.decision_source === "gpt")
+        )
+        setBeats({
+          ...fallbackBeats,
+          ...nextBeats,
+          emergency: Number(nextBeats.emergency ?? (emergencyActive ? 100 : 0)),
         })
 
         const activeZone = zonesRef.current.find(z => z.id === selectedZoneIdRef.current)
         const activeZoneCoord = activeZone?.coord || mapCoordRef.current
         const activeZoneAddr = activeZone?.addr || mapAddrRef.current
-        setLastSnd(data.stt_text?.trim() ? "speech" : (data.beats_raw_label || data.beats_label || "—"))
+        const rawSoundLabel = data.stt_text?.trim() ? "speech" : (data.beats_raw_label || data.beats_label || "—")
+        setLastSnd(SOUND_LABEL_TEXT[rawSoundLabel] || rawSoundLabel)
 
         let eventTitle = data.situation_name || "분석 결과"
         let noticeKind = null
@@ -1275,7 +1298,7 @@ function MainScreen({ adminId, config, serverIP, onGoConfig, onLogout, onUpdateC
               <span style={mctSt}>⚡ 실시간 음향 분석</span>
             </div>
             <div style={{ display:"flex", gap:10, padding:"10px 12px" }}>
-              {[["배경음", beats.background, C.green], ["큰소음", beats.speech, C.t2], ["침입음", beats.footsteps, C.amber], ["응급음", beats.interaction, C.red], ["충격음", beats.impact_noise, C.violet]].map(([lbl, val, color]) =>(
+              {[["배경음", beats.background, C.green], ["사람 목소리", beats.speech, C.cyan], ["발소리", beats.footsteps, C.amber], ["문소리", beats.interaction, C.violet], ["충격음", beats.impact_noise, C.red], ["응급음", beats.emergency, C.red]].map(([lbl, val, color]) =>(
                 <div key={lbl} style={{ flex:1, background:"rgba(255,255,255,.03)", borderRadius:6, padding:"8px" }}>
                   <div style={{ fontSize:10, color:C.t2, marginBottom:5 }}>{lbl}</div>
                   <div style={{ display:"flex", alignItems:"center", gap:6 }}>

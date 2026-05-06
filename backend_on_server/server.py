@@ -273,16 +273,20 @@ def normalize_text(text: str) -> str:
 def make_beats_scores(sound_event, decision) -> dict:
     top_dict = dict(getattr(sound_event, "top_labels", []) or [])
     if top_dict:
-        return {k: int(top_dict.get(k, 0) * 100)
-                for k in ("background", "speech", "footsteps", "interaction", "impact_noise")}
+        scores = {k: int(top_dict.get(k, 0) * 100)
+                  for k in ("background", "speech", "footsteps", "interaction", "impact_noise")}
+        scores["emergency"] = 0
+        return scores
     raw = getattr(sound_event, "raw_label", "")
-    return {
+    scores = {
         "background":   90 if decision.situation == 0 else 5,
         "speech":       80 if raw == "speech"       else 0,
         "footsteps":    80 if raw == "footsteps"    else 0,
         "interaction":  80 if raw == "interaction"  else 0,
         "impact_noise": 80 if raw == "impact_noise" else 0,
     }
+    scores["emergency"] = 0
+    return scores
 
 
 async def broadcast(payload: dict):
@@ -502,9 +506,15 @@ async def _process_audio(
     raw_label       = str(getattr(sound_event, "raw_label", "") or "")
     confidence      = float(getattr(sound_event, "confidence", 0.0) or 0.0)
 
-    raw_emergency = raw_label == "emergency" and confidence >= 0.80
-    zone_state["emergency_count"] = (zone_state.get("emergency_count", 0) + 1) if raw_emergency else 0
-    confirmed_emergency = has_emg_keyword or zone_state["emergency_count"] >= 2
+    raw_danger_candidate = raw_label == "impact_noise" and confidence >= 0.80
+    zone_state["emergency_count"] = (zone_state.get("emergency_count", 0) + 1) if raw_danger_candidate else 0
+    gpt_confirmed_emergency = (
+        decision.situation == 2
+        and decision.emergency_candidate
+        and str(decision.source).startswith("gpt")
+    )
+    emergency_voice_confirmed = has_emg_keyword or gpt_confirmed_emergency
+    confirmed_emergency = emergency_voice_confirmed or zone_state["emergency_count"] >= 2
 
     # ── 응급 잠금 처리 (app.py _apply_emergency_lock 동일 로직) ──
     in_emergency_lock = False
@@ -606,6 +616,9 @@ async def _process_audio(
         "action":            decision.action,
         "tts_key":           decision.tts_key,
         "tts_message":       tts_message,
+        "emergency_candidate":       decision.emergency_candidate,
+        "emergency_voice_confirmed": emergency_voice_confirmed,
+        "decision_source":           decision.source,
         "beats_label":       sound_event.label,
         "beats_raw_label":   sound_event.raw_label,
         "beats_confidence":  sound_event.confidence,
@@ -613,7 +626,8 @@ async def _process_audio(
         "peak":              sound_event.peak,
         "stt_text":          stt_text,
         "dwell_seconds":     dwell_seconds,
-        "beats":             make_beats_scores(sound_event, decision),
+        "beats":             {**make_beats_scores(sound_event, decision),
+                              "emergency": 100 if decision.situation == 2 and emergency_voice_confirmed else 0},
         "zone_id":           zone_id,
         "zone_name":         zone_name,
         "coord":             zone_info.get("coord", ""),
