@@ -67,6 +67,42 @@ _received_dir.mkdir(parents=True, exist_ok=True)
 app.mount("/tts", StaticFiles(directory=str(_tts_dir)), name="tts")
 
 
+def looks_like_device_name(name: str | None) -> bool:
+    text = (name or "").strip().lower()
+    def numbered(prefix: str) -> bool:
+        if text == prefix:
+            return True
+        if not text.startswith(prefix):
+            return False
+        suffix = text[len(prefix):].strip(" -_()")
+        return suffix.isdigit()
+
+    return (
+        text.startswith("핸드폰 센서")
+        or numbered("센서")
+        or numbered("기계")
+        or numbered("machine")
+        or numbered("device")
+    )
+
+
+def resolve_zone_display(
+    db: Session,
+    zone_id: str,
+    fallback_name: str | None = None,
+    fallback_coord: str | None = None,
+    fallback_addr: str | None = None,
+) -> tuple[str, str, str]:
+    zone = db.query(Zone).filter(Zone.id == zone_id).first() if zone_id else None
+    if zone:
+        return zone.name, zone.coord or fallback_coord or "", fallback_addr or settings.location_text
+
+    if fallback_name and not looks_like_device_name(fallback_name):
+        return fallback_name, fallback_coord or "", fallback_addr or settings.location_text
+
+    return settings.zone_name, fallback_coord or "", fallback_addr or settings.location_text
+
+
 # ── 구역 CRUD API ─────────────────────────────────────────────────
 @app.get("/api/zones/labels")
 def get_labels():
@@ -302,16 +338,24 @@ async def broadcast(payload: dict):
 
 # ── /api/zone-alert ───────────────────────────────────────────────
 @app.post("/api/zone-alert")
-async def receive_zone_alert(payload: dict = Body(...)):
+async def receive_zone_alert(payload: dict = Body(...), db: Session = Depends(get_db)):
     """다른 구역 감지 시스템이 호출하는 알림 수신 API."""
     kind = payload.get("kind") or "warn1"
+    zone_id = payload.get("zone_id") or payload.get("zoneId") or "external-zone"
+    zone_name, coord, addr = resolve_zone_display(
+        db=db,
+        zone_id=zone_id,
+        fallback_name=payload.get("zone_name") or payload.get("zoneName"),
+        fallback_coord=payload.get("coord") or payload.get("map_coord"),
+        fallback_addr=payload.get("addr") or payload.get("address"),
+    )
     event = {
         "type": "zone_alert",
         "timestamp": payload.get("timestamp") or datetime.now().strftime("%H:%M:%S"),
-        "zone_id":   payload.get("zone_id")   or "external-zone",
-        "zone_name": payload.get("zone_name") or "다른 구역",
-        "coord":     payload.get("coord")     or "",
-        "addr":      payload.get("addr")      or "",
+        "zone_id":   zone_id,
+        "zone_name": zone_name,
+        "coord":     coord,
+        "addr":      addr,
         "kind":      kind,
         "situation": payload.get("situation", 2 if kind == "emergency" else 1),
         "tts_key":   payload.get("tts_key") or (
@@ -387,7 +431,7 @@ async def dashboard_endpoint(websocket: WebSocket):
 
 # ── /sensor (현장 sensor.py) ──────────────────────────────────────
 @app.websocket("/sensor")
-async def sensor_endpoint(websocket: WebSocket):
+async def sensor_endpoint(websocket: WebSocket, db: Session = Depends(get_db)):
     await websocket.accept()
     print("🎤 [Sensor] 센서 연결됨")
 
@@ -407,6 +451,14 @@ async def sensor_endpoint(websocket: WebSocket):
         meta = json.loads(first)
         if meta.get("type") == "zone_info":
             zone_info.update({k: meta[k] for k in meta if k != "type"})
+            zone_name, coord, addr = resolve_zone_display(
+                db=db,
+                zone_id=zone_info.get("zone_id") or "default",
+                fallback_name=zone_info.get("zone_name"),
+                fallback_coord=zone_info.get("coord"),
+                fallback_addr=zone_info.get("addr"),
+            )
+            zone_info.update({"zone_name": zone_name, "coord": coord, "addr": addr})
             print(
                 f"[Sensor] 구역 등록: {zone_info['zone_name']} ({zone_info['zone_id']}) "
                 f"| {zone_info['sample_rate']}Hz / {zone_info['chunk_seconds']}s"
@@ -652,7 +704,7 @@ async def _process_audio(
 
 # ── /upload (핸드폰 센서 앱) ──────────────────────────────────────
 @app.post("/upload")
-async def upload_audio(file: UploadFile = File(...), device_id: str = Form(...)):
+async def upload_audio(file: UploadFile = File(...), device_id: str = Form(...), db: Session = Depends(get_db)):
     """
     핸드폰 센서 앱에서 녹음 WAV 파일을 받아 AI 분석 후 안내방송 .mp3 URL 반환.
 
@@ -678,11 +730,13 @@ async def upload_audio(file: UploadFile = File(...), device_id: str = Form(...))
     tmp_path   = Path(tempfile.gettempdir()) / f"upload_{device_id}.wav"
     sf.write(tmp_path, audio_np, sample_rate)
 
+    zone_name, coord, addr = resolve_zone_display(db=db, zone_id=device_id)
+
     zone_info  = {
         "zone_id":   device_id,
-        "zone_name": f"핸드폰 센서 ({device_id})",
-        "coord": "",
-        "addr":  "",
+        "zone_name": zone_name,
+        "coord": coord,
+        "addr":  addr,
     }
     zone_state = get_zone_state(device_id)
 

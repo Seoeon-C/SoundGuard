@@ -35,6 +35,16 @@ const SOUND_LABEL_TEXT = {
   empty: "무음",
 }
 
+const looksLikeDeviceName = (name="") => {
+  const text = String(name || "").trim().toLowerCase()
+  const numbered = (prefix) => {
+    if (text === prefix) return true
+    if (!text.startsWith(prefix)) return false
+    return /^\d+$/.test(text.slice(prefix.length).trim().replace(/^[-_() ]+|[-_() ]+$/g, ""))
+  }
+  return text.startsWith("핸드폰 센서") || numbered("센서") || numbered("기계") || numbered("machine") || numbered("device")
+}
+
 const DEFAULT_MSGS = {
   w1: "무단 침입이 감지되었습니다. 즉시 퇴거하지 않을 시 관계기관에 신고 조치됩니다.",
   w2: "귀하의 위치 정보가 관계기관에 전송되었습니다. 즉시 이 구역을 이탈하십시오.",
@@ -583,7 +593,9 @@ function MainScreen({ adminId, config, serverIP, onGoConfig, onLogout, onUpdateC
 
   const pushOtherZoneNotification = useCallback((payload) => {
     const zoneId = payload.zone_id || payload.zoneId
-    const zoneName = payload.zone_name || payload.zoneName || "다른 구역"
+    const incomingZoneName = payload.zone_name || payload.zoneName || ""
+    const matchedZone = zonesRef.current.find(z => z.id === zoneId)
+    const zoneName = matchedZone?.name || (!looksLikeDeviceName(incomingZoneName) && incomingZoneName) || "관리구역 미지정"
 
     if (!zoneId || zoneId === selectedZoneIdRef.current) return
 
@@ -599,8 +611,8 @@ function MainScreen({ adminId, config, serverIP, onGoConfig, onLogout, onUpdateC
       id: Date.now() + Math.random(),
       zoneId,
       zoneName,
-      coord: payload.coord || payload.map_coord || "37.5665° N, 126.9780° E",
-      addr: payload.addr || payload.address || zoneName,
+      coord: matchedZone?.coord || payload.coord || payload.map_coord || "37.5665° N, 126.9780° E",
+      addr: matchedZone?.addr || payload.addr || payload.address || zoneName,
       kind,
       type,
       title: kind === "emergency" ? "응급상황" : "무단침입",
@@ -742,7 +754,9 @@ function MainScreen({ adminId, config, serverIP, onGoConfig, onLogout, onUpdateC
 
         const currentMonitoringZoneId = selectedZoneIdRef.current
         const incomingZoneId = data.zone_id || data.zoneId || null
-        const incomingZoneName = data.zone_name || data.zoneName || "관리구역 미지정"
+        const rawIncomingZoneName = data.zone_name || data.zoneName || ""
+        const matchedIncomingZone = zonesRef.current.find(z => z.id === incomingZoneId)
+        const incomingZoneName = matchedIncomingZone?.name || (!looksLikeDeviceName(rawIncomingZoneName) && rawIncomingZoneName) || "관리구역 미지정"
 
         const isOtherZoneAlert =
           Boolean(incomingZoneId) &&
@@ -754,8 +768,8 @@ function MainScreen({ adminId, config, serverIP, onGoConfig, onLogout, onUpdateC
             id: Date.now() + Math.random(),
             zoneId: incomingZoneId,
             zoneName: incomingZoneName,
-            coord: data.coord || activeZoneCoord,
-            addr: data.addr || activeZoneAddr,
+            coord: matchedIncomingZone?.coord || data.coord || activeZoneCoord,
+            addr: matchedIncomingZone?.addr || data.addr || activeZoneAddr,
             kind: noticeKind,
             type: noticeType,
             title: noticeKind === "emergency" ? "응급상황" : "무단침입",

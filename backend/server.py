@@ -50,6 +50,42 @@ async def broadcast_to_dashboards(payload: dict) -> None:
 init_db()
 
 
+def looks_like_device_name(name: str | None) -> bool:
+    text = (name or "").strip().lower()
+    def numbered(prefix: str) -> bool:
+        if text == prefix:
+            return True
+        if not text.startswith(prefix):
+            return False
+        suffix = text[len(prefix):].strip(" -_()")
+        return suffix.isdigit()
+
+    return (
+        text.startswith("핸드폰 센서")
+        or numbered("센서")
+        or numbered("기계")
+        or numbered("machine")
+        or numbered("device")
+    )
+
+
+def resolve_zone_display(
+    db: Session,
+    zone_id: str,
+    fallback_name: str | None = None,
+    fallback_coord: str | None = None,
+    fallback_addr: str | None = None,
+) -> tuple[str, str, str]:
+    zone = db.query(Zone).filter(Zone.id == zone_id).first() if zone_id else None
+    if zone:
+        return zone.name, zone.coord or fallback_coord or "", fallback_addr or ""
+
+    if fallback_name and not looks_like_device_name(fallback_name):
+        return fallback_name, fallback_coord or "", fallback_addr or ""
+
+    return settings.zone_name, fallback_coord or "", fallback_addr or settings.location_text
+
+
 @app.get("/api/zones/labels")
 def get_labels():
     return ZONE_LABELS
@@ -148,7 +184,7 @@ def reverse_geocode(lat: float = Query(...), lon: float = Query(...)):
 
 
 @app.post("/api/zone-alert")
-async def receive_zone_alert(payload: dict = Body(...)):
+async def receive_zone_alert(payload: dict = Body(...), db: Session = Depends(get_db)):
     """
     다른 구역의 감지 시스템이 호출하는 알림 수신 API.
 
@@ -170,13 +206,22 @@ async def receive_zone_alert(payload: dict = Body(...)):
         "INTRUSION_WARN_1"
     )
 
+    zone_id = payload.get("zone_id") or payload.get("zoneId") or "external-zone"
+    zone_name, coord, addr = resolve_zone_display(
+        db=db,
+        zone_id=zone_id,
+        fallback_name=payload.get("zone_name") or payload.get("zoneName"),
+        fallback_coord=payload.get("coord") or payload.get("map_coord"),
+        fallback_addr=payload.get("addr") or payload.get("address"),
+    )
+
     event = {
         "type": "zone_alert",
         "timestamp": payload.get("timestamp") or datetime.now().strftime("%H:%M:%S"),
-        "zone_id": payload.get("zone_id") or payload.get("zoneId") or "external-zone",
-        "zone_name": payload.get("zone_name") or payload.get("zoneName") or "다른 구역",
-        "coord": payload.get("coord") or payload.get("map_coord") or "",
-        "addr": payload.get("addr") or payload.get("address") or "",
+        "zone_id": zone_id,
+        "zone_name": zone_name,
+        "coord": coord,
+        "addr": addr,
         "kind": kind,
         "situation": payload.get("situation", situation),
         "tts_key": payload.get("tts_key") or tts_key,
