@@ -7,26 +7,34 @@
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
-    html, body, #map { width: 100%; height: 100%; overflow: hidden; }
+    html, body, #map { width: 100%; height: 100%; overflow: hidden; background:#07101f; }
 
-    .pulse-marker { position: relative; width: 40px; height: 40px; }
-    .pulse-marker .dot {
+    .zone-marker { position: relative; width: 34px; height: 34px; }
+    .zone-marker .dot {
       position: absolute; top: 50%; left: 50%;
       transform: translate(-50%, -50%);
       width: 12px; height: 12px;
-      background: #ef4444; border-radius: 50%;
+      border-radius: 50%;
       border: 2px solid #fff;
-      box-shadow: 0 0 6px rgba(239,68,68,0.8);
       z-index: 2;
     }
-    .pulse-marker .ring {
+    .zone-marker .ring {
       position: absolute; top: 50%; left: 50%;
       transform: translate(-50%, -50%);
-      width: 36px; height: 36px;
+      width: 34px; height: 34px;
       border-radius: 50%;
-      border: 2px solid rgba(239,68,68,0.5);
       animation: ring-pulse 1.8s ease-out infinite;
     }
+    .zone-marker.selected .dot { width: 15px; height: 15px; }
+    .zone-marker.selected .ring { width: 42px; height: 42px; }
+
+    .zone-normal .dot { background:#34d399; box-shadow:0 0 12px rgba(52,211,153,.9); }
+    .zone-normal .ring { border:2px solid rgba(52,211,153,.45); }
+    .zone-warning .dot { background:#fbbf24; box-shadow:0 0 12px rgba(251,191,36,.9); }
+    .zone-warning .ring { border:2px solid rgba(251,191,36,.5); }
+    .zone-danger .dot { background:#f87171; box-shadow:0 0 12px rgba(248,113,113,.95); }
+    .zone-danger .ring { border:2px solid rgba(248,113,113,.55); }
+
     @keyframes ring-pulse {
       0%   { transform: translate(-50%,-50%) scale(0.4); opacity: 1; }
       100% { transform: translate(-50%,-50%) scale(1.6); opacity: 0; }
@@ -45,39 +53,124 @@
   <div id="map"></div>
 
   <script>
-    var params = new URLSearchParams(window.location.search);
+    const params = new URLSearchParams(window.location.search);
+    const VWORLD_KEY = params.get("key") || "";
+    const rawZones = params.get("zones");
 
-    var LAT = parseFloat(params.get("lat")) || 37.5665;
-    var LON = parseFloat(params.get("lon")) || 126.9780;
-    var PLACE_NAME = params.get("name") || "관리구역 미지정";
-    var PLACE_ADDR = params.get("addr") || "관할 구역 주소 미상";
-    var STATUS = params.get("status") || "normal";
-    var VWORLD_KEY = params.get("key") || "";
+    function parseCoord(coord) {
+      const nums = String(coord || "").match(/-?\d+(\.\d+)?/g);
+      if (!nums || nums.length < 2) return null;
+      return [Number(nums[0]), Number(nums[1])];
+    }
 
-    var map = L.map('map', {
+    function escapeHtml(value) {
+      return String(value ?? "")
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&#039;");
+    }
+
+    function legacyStatusToNumber(status) {
+      if (status === "danger") return 2;
+      if (status === "warning") return 1;
+      return 0;
+    }
+
+    let zones = [];
+    try {
+      zones = rawZones ? JSON.parse(rawZones) : [];
+    } catch (e) {
+      zones = [];
+    }
+
+    const fallback = [{
+      id: "default",
+      name: params.get("name") || "관리구역 미지정",
+      addr: params.get("addr") || "관할 구역 주소 미상",
+      coord: `${params.get("lat") || 37.5665}, ${params.get("lon") || 126.9780}`,
+      status: legacyStatusToNumber(params.get("status")),
+      selected: true,
+    }];
+
+    if (!Array.isArray(zones) || zones.length === 0) zones = fallback;
+
+    const parsedZones = zones
+      .map(z => ({ ...z, latlon: parseCoord(z.coord) }))
+      .filter(z => z.latlon);
+
+    const center = parsedZones.find(z => z.selected)?.latlon || parsedZones[0]?.latlon || [37.5665, 126.9780];
+
+    const map = L.map("map", {
       zoomControl: true,
       attributionControl: true,
-    }).setView([LAT, LON], 16);
+    }).setView(center, 15);
 
-    var base = 'https://api.vworld.kr/req/wmts/1.0.0/' + VWORLD_KEY;
-    L.tileLayer(base + '/midnight/{z}/{y}/{x}.png', { maxZoom: 19, attribution: '© VWorld' }).addTo(map);
+    const base = "https://api.vworld.kr/req/wmts/1.0.0/" + VWORLD_KEY;
+    L.tileLayer(base + "/midnight/{z}/{y}/{x}.png", {
+      maxZoom: 19,
+      attribution: "VWorld",
+    }).addTo(map);
 
-    var pulseIcon = L.divIcon({
-      className: '',
-      html: '<div class="pulse-marker"><div class="ring"></div><div class="dot"></div></div>',
-      iconSize: [40, 40],
-      iconAnchor: [20, 20],
-      popupAnchor: [0, -20],
+    function statusClass(status) {
+      if (Number(status) === 2) return "zone-danger";
+      if (Number(status) === 1) return "zone-warning";
+      return "zone-normal";
+    }
+
+    function statusText(status) {
+      if (Number(status) === 2) return "위험";
+      if (Number(status) === 1) return "경고";
+      return "정상";
+    }
+
+    const bounds = [];
+
+    parsedZones.forEach(z => {
+      const cls = statusClass(z.status);
+      const selected = z.selected ? "selected" : "";
+
+      const icon = L.divIcon({
+        className: "",
+        html: `<div class="zone-marker ${cls} ${selected}">
+                 <div class="ring"></div>
+                 <div class="dot"></div>
+               </div>`,
+        iconSize: [42, 42],
+        iconAnchor: [21, 21],
+        popupAnchor: [0, -22],
+      });
+
+      L.marker(z.latlon, { icon })
+        .addTo(map)
+        .bindPopup(
+          `${escapeHtml(z.name || "관리구역 미지정")}<br>` +
+          `<small style="color:#94a3b8">${escapeHtml(z.addr || "주소 미상")} / ${escapeHtml(z.coord || "")}</small><br>` +
+          `<small style="color:#cbd5e1">상태: ${statusText(z.status)}</small>`
+        );
+
+      bounds.push(z.latlon);
     });
 
-    L.marker([LAT, LON], { icon: pulseIcon })
-      .addTo(map)
-      .bindPopup(
-        '📍 ' + PLACE_NAME +
-        '<br><small style="color:#94a3b8">' +
-        PLACE_ADDR + ' · ' + LAT + '° N, ' + LON + '° E</small>'
-      )
-      .openPopup();
+    if (bounds.length >= 2) {
+      map.fitBounds(bounds, { padding: [45, 45], maxZoom: 15 });
+    } else if (bounds.length === 1) {
+      map.setView(bounds[0], 16);
+    }
+
+    const selectedZone = parsedZones.find(z => z.selected);
+    if (selectedZone) {
+      map.eachLayer(layer => {
+        if (layer instanceof L.Marker) {
+          const ll = layer.getLatLng();
+          if (Math.abs(ll.lat - selectedZone.latlon[0]) < 0.000001 &&
+              Math.abs(ll.lng - selectedZone.latlon[1]) < 0.000001) {
+            layer.openPopup();
+          }
+        }
+      });
+    }
   </script>
 </body>
 </html>
