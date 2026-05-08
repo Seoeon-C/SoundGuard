@@ -1,8 +1,8 @@
 <!DOCTYPE html>
 <html lang="ko">
 <head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
   <style>
@@ -11,64 +11,46 @@
 
     .zone-marker { position: relative; width: 34px; height: 34px; }
     .zone-marker .dot {
-      position:absolute; top:50%; left:50%;
-      transform:translate(-50%, -50%);
-      width:12px; height:12px; border-radius:50%;
-      border:2px solid #fff; z-index:2;
+      position: absolute; top: 50%; left: 50%;
+      transform: translate(-50%, -50%);
+      width: 12px; height: 12px;
+      border-radius: 50%;
+      border: 2px solid #fff;
+      z-index: 2;
     }
     .zone-marker .ring {
-      position:absolute; top:50%; left:50%;
-      transform:translate(-50%, -50%);
-      width:32px; height:32px; border-radius:50%;
-      animation:ring-pulse 1.8s ease-out infinite;
+      position: absolute; top: 50%; left: 50%;
+      transform: translate(-50%, -50%);
+      width: 34px; height: 34px;
+      border-radius: 50%;
+      animation: ring-pulse 1.8s ease-out infinite;
     }
-    .zone-marker.selected .dot { width:15px; height:15px; }
-    .zone-marker.selected .ring { width:42px; height:42px; }
+    .zone-marker.selected .dot { width: 15px; height: 15px; }
+    .zone-marker.selected .ring { width: 42px; height: 42px; }
 
     .zone-normal .dot { background:#34d399; box-shadow:0 0 12px rgba(52,211,153,.9); }
     .zone-normal .ring { border:2px solid rgba(52,211,153,.45); }
-
     .zone-warning .dot { background:#fbbf24; box-shadow:0 0 12px rgba(251,191,36,.9); }
     .zone-warning .ring { border:2px solid rgba(251,191,36,.5); }
-
     .zone-danger .dot { background:#f87171; box-shadow:0 0 12px rgba(248,113,113,.95); }
     .zone-danger .ring { border:2px solid rgba(248,113,113,.55); }
 
     @keyframes ring-pulse {
-      0% { transform:translate(-50%,-50%) scale(.45); opacity:1; }
-      100% { transform:translate(-50%,-50%) scale(1.7); opacity:0; }
+      0%   { transform: translate(-50%,-50%) scale(0.4); opacity: 1; }
+      100% { transform: translate(-50%,-50%) scale(1.6); opacity: 0; }
     }
 
     .leaflet-popup-content-wrapper {
-      background:#1e293b; color:#e2e8f0;
-      border:1px solid #334155; border-radius:8px;
-      font-size:.78rem;
+      background: #1e293b; color: #e2e8f0;
+      border: 1px solid #334155; border-radius: 8px;
+      font-size: 0.78rem;
     }
-    .leaflet-popup-tip { background:#1e293b; }
-    .leaflet-popup-close-button { color:#94a3b8 !important; }
-
-    .legend {
-      position:absolute; right:14px; bottom:12px; z-index:999;
-      background:rgba(15,23,42,.9);
-      border:1px solid rgba(148,163,184,.25);
-      border-radius:8px;
-      padding:8px 10px;
-      color:#cbd5e1;
-      font-size:11px;
-      display:flex;
-      gap:12px;
-    }
-    .legend span { display:flex; align-items:center; gap:5px; }
-    .legend i { width:9px; height:9px; border-radius:50%; display:inline-block; }
+    .leaflet-popup-tip { background: #1e293b; }
+    .leaflet-popup-close-button { color: #94a3b8 !important; }
   </style>
 </head>
 <body>
   <div id="map"></div>
-  <div class="legend">
-    <span><i style="background:#34d399"></i>정상</span>
-    <span><i style="background:#fbbf24"></i>경고</span>
-    <span><i style="background:#f87171"></i>응급</span>
-  </div>
 
   <script>
     const params = new URLSearchParams(window.location.search);
@@ -79,6 +61,21 @@
       const nums = String(coord || "").match(/-?\d+(\.\d+)?/g);
       if (!nums || nums.length < 2) return null;
       return [Number(nums[0]), Number(nums[1])];
+    }
+
+    function escapeHtml(value) {
+      return String(value ?? "")
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&#039;");
+    }
+
+    function legacyStatusToNumber(status) {
+      if (status === "danger") return 2;
+      if (status === "warning") return 1;
+      return 0;
     }
 
     let zones = [];
@@ -92,12 +89,12 @@
       id: "default",
       name: params.get("name") || "관리구역 미지정",
       addr: params.get("addr") || "관할 구역 주소 미상",
-      coord: `${params.get("lat") || 37.5665}° N, ${params.get("lon") || 126.9780}° E`,
-      status: params.get("status") === "danger" ? 2 : params.get("status") === "warning" ? 1 : 0,
+      coord: `${params.get("lat") || 37.5665}, ${params.get("lon") || 126.9780}`,
+      status: legacyStatusToNumber(params.get("status")),
       selected: true,
     }];
 
-    if (!zones.length) zones = fallback;
+    if (!Array.isArray(zones) || zones.length === 0) zones = fallback;
 
     const parsedZones = zones
       .map(z => ({ ...z, latlon: parseCoord(z.coord) }))
@@ -113,7 +110,7 @@
     const base = "https://api.vworld.kr/req/wmts/1.0.0/" + VWORLD_KEY;
     L.tileLayer(base + "/midnight/{z}/{y}/{x}.png", {
       maxZoom: 19,
-      attribution: "© VWorld",
+      attribution: "VWorld",
     }).addTo(map);
 
     function statusClass(status) {
@@ -123,7 +120,7 @@
     }
 
     function statusText(status) {
-      if (Number(status) === 2) return "응급";
+      if (Number(status) === 2) return "위험";
       if (Number(status) === 1) return "경고";
       return "정상";
     }
@@ -148,8 +145,8 @@
       L.marker(z.latlon, { icon })
         .addTo(map)
         .bindPopup(
-          `📍 ${z.name}<br>` +
-          `<small style="color:#94a3b8">${z.addr || "주소 미상"} · ${z.coord || ""}</small><br>` +
+          `${escapeHtml(z.name || "관리구역 미지정")}<br>` +
+          `<small style="color:#94a3b8">${escapeHtml(z.addr || "주소 미상")} / ${escapeHtml(z.coord || "")}</small><br>` +
           `<small style="color:#cbd5e1">상태: ${statusText(z.status)}</small>`
         );
 

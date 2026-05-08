@@ -1,13 +1,18 @@
+import 'dart:async';
 import 'dart:io';
 import 'dart:convert';
+import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:record/record.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:http/http.dart' as http;
 import 'package:permission_handler/permission_handler.dart';
 import 'package:audioplayers/audioplayers.dart';
+import 'package:web_socket_channel/web_socket_channel.dart';
 
-const String kServerUrl = "http://168.107.31.37:8000";
+const String kServerHost = "168.107.31.37:8000";
+const String kHttpBase   = "http://$kServerHost";
+const String kWsBase     = "ws://$kServerHost";
 
 void main() => runApp(const MaterialApp(home: SensorApp()));
 
@@ -18,17 +23,28 @@ class SensorApp extends StatefulWidget {
 }
 
 class _SensorAppState extends State<SensorApp> {
-  final _record = AudioRecorder();
+  final _record      = AudioRecorder();
   final _audioPlayer = AudioPlayer();
 
-  bool _isSensing = false;
-  bool _isAnnouncing = false;
-  bool _isUploading = false;
-  String _statusText = "구역을 먼저 설정해 주세요";
+  // 상태
+  bool   _isSensing    = false;
+  bool   _isAnnouncing = false;
+  bool   _isPaused     = false;
+  String _statusText   = "구역을 먼저 설정해 주세요";
 
-  List<Map<String, dynamic>> _zones = [];
-  Map<String, dynamic>? _selectedZone;
-  bool _loadingZones = false;
+  // 구역
+  List<Map<String, dynamic>> _zones       = [];
+  Map<String, dynamic>?      _selectedZone;
+  bool                       _loadingZones = false;
+
+  // WebSocket
+  WebSocketChannel? _ws;
+  bool              _wsConnected = false;
+  StreamSubscription? _wsSub;
+
+  // 청크 스킵 (최신 청크만 전송)
+  Uint8List? _pendingChunk;
+  bool       _isSendingChunk = false;
 
   @override
   void initState() {
@@ -36,11 +52,21 @@ class _SensorAppState extends State<SensorApp> {
     _fetchZones();
   }
 
+  @override
+  void dispose() {
+    _disconnectWs();
+    _record.dispose();
+    _audioPlayer.dispose();
+    super.dispose();
+  }
+
+  // ── 구역 목록 ──────────────────────────────────────────────────
+
   Future<void> _fetchZones() async {
     setState(() => _loadingZones = true);
     try {
       final response = await http
-          .get(Uri.parse('$kServerUrl/api/zones'))
+          .get(Uri.parse('$kHttpBase/api/zones'))
           .timeout(const Duration(seconds: 10));
       if (response.statusCode == 200) {
         final List<dynamic> data = jsonDecode(response.body);
@@ -66,10 +92,8 @@ class _SensorAppState extends State<SensorApp> {
           children: [
             const Padding(
               padding: EdgeInsets.symmetric(vertical: 16),
-              child: Text(
-                "구역 선택",
-                style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-              ),
+              child: Text("구역 선택",
+                  style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
             ),
             const Divider(height: 1),
             if (_zones.isEmpty)
@@ -87,10 +111,8 @@ class _SensorAppState extends State<SensorApp> {
                   children: _zones.map((zone) {
                     final isSelected = _selectedZone?['id'] == zone['id'];
                     return ListTile(
-                      leading: Icon(
-                        Icons.location_on,
-                        color: isSelected ? Colors.blue : Colors.grey,
-                      ),
+                      leading: Icon(Icons.location_on,
+                          color: isSelected ? Colors.blue : Colors.grey),
                       title: Text(zone['name'] ?? zone['id']),
                       subtitle:
                           zone['label'] != null ? Text(zone['label']) : null,
@@ -99,7 +121,7 @@ class _SensorAppState extends State<SensorApp> {
                       onTap: () {
                         setState(() {
                           _selectedZone = zone;
-                          _statusText = "감지 대기 중";
+                          _statusText   = "감지 대기 중";
                         });
                         Navigator.pop(ctx);
                       },
@@ -125,11 +147,75 @@ class _SensorAppState extends State<SensorApp> {
     );
   }
 
-  void _setStatus(String text) {
-    if (mounted) setState(() => _statusText = text);
+  // ── WebSocket ──────────────────────────────────────────────────
+
+  void _connectWs() {
+    final zone = _selectedZone!;
+    debugPrint("🔌 WebSocket 연결 시도: $kWsBase/sensor");
+
+    _ws = WebSocketChannel.connect(Uri.parse('$kWsBase/sensor'));
+
+    // zone_info 전송
+    _ws!.sink.add(jsonEncode({
+      'type':          'zone_info',
+      'zone_id':       zone['id'],
+      'zone_name':     zone['name'] ?? '알 수 없는 구역',
+      'coord':         zone['coord'] ?? '',
+      'addr':          zone['label'] ?? '',
+      'sample_rate':   16000,
+      'chunk_seconds': 5,
+    }));
+
+    _wsSub = _ws!.stream.listen(
+      (message) {
+        if (message is! String) return;
+        final data = jsonDecode(message) as Map<String, dynamic>;
+        final type = data['type'];
+
+        if (type == 'pause') {
+          setState(() => _isPaused = data['paused'] == true);
+          _setStatus(_isPaused ? "감지 일시정지" : "실시간 감지 중...");
+        } else if (type == 'tts') {
+          final url = (data['announcement_url'] ?? '') as String;
+          if (url.isNotEmpty && !_isAnnouncing) {
+            _setStatus("안내방송 재생 중...");
+            _downloadAndPlay(url);
+          }
+        }
+      },
+      onDone: () {
+        debugPrint("🔌 WebSocket 연결 종료");
+        setState(() => _wsConnected = false);
+        if (_isSensing) {
+          _setStatus("재연결 중...");
+          Future.delayed(const Duration(seconds: 3), () {
+            if (_isSensing) _connectWs();
+          });
+        }
+      },
+      onError: (e) {
+        debugPrint("❌ WebSocket 오류: $e");
+        setState(() => _wsConnected = false);
+        if (_isSensing) {
+          Future.delayed(const Duration(seconds: 3), () {
+            if (_isSensing) _connectWs();
+          });
+        }
+      },
+    );
+
+    setState(() => _wsConnected = true);
+    debugPrint("✅ WebSocket 연결됨");
   }
 
-  String get _deviceId => "${_selectedZone!['id']}_phone01";
+  void _disconnectWs() {
+    _wsSub?.cancel();
+    _ws?.sink.close();
+    _ws = null;
+    _wsConnected = false;
+  }
+
+  // ── 오디오 재생 ────────────────────────────────────────────────
 
   Future<void> _downloadAndPlay(String url) async {
     _isAnnouncing = true;
@@ -141,59 +227,54 @@ class _SensorAppState extends State<SensorApp> {
       debugPrint("❌ 재생 오류: $e");
     } finally {
       _isAnnouncing = false;
+      if (_isSensing && !_isPaused) _setStatus("실시간 감지 중...");
     }
   }
 
-  Future<void> _uploadAndPlayAnnouncement(String path) async {
-    if (_isUploading || _isAnnouncing) {
-      final file = File(path);
-      if (await file.exists()) await file.delete();
-      return;
-    }
-    _isUploading = true;
-    try {
-      _setStatus("서버로 전송 중...");
+  // ── 청크 전송 (최신 청크만) ────────────────────────────────────
 
-      final request = http.MultipartRequest(
-        'POST',
-        Uri.parse('$kServerUrl/upload'),
-      );
-      request.files.add(await http.MultipartFile.fromPath('file', path));
-      request.fields['device_id'] = _deviceId;
-
-      final streamedResponse =
-          await request.send().timeout(const Duration(seconds: 30));
-      final response = await http.Response.fromStream(streamedResponse);
-
-      if (response.statusCode == 200) {
-        final data = jsonDecode(response.body);
-        final String announcementUrl = data['announcement_url'] ?? "";
-
-        if (announcementUrl.isNotEmpty) {
-          _setStatus("안내방송 재생 중...");
-          await _downloadAndPlay(announcementUrl);
-          _setStatus("실시간 감지 중...");
-        } else {
-          _setStatus("실시간 감지 중...");
-        }
-      } else {
-        _setStatus("서버 응답 오류 (${response.statusCode}) — 재시도 중...");
+  Future<void> _sendChunkLoop() async {
+    while (_isSensing) {
+      if (_pendingChunk == null) {
+        await Future.delayed(const Duration(milliseconds: 50));
+        continue;
       }
-    } catch (e) {
-      _setStatus("통신 오류 — 재시도 중...");
-      debugPrint("❌ 오류: $e");
-    } finally {
-      _isUploading = false;
-      final file = File(path);
-      if (await file.exists()) await file.delete();
+
+      if (_isSendingChunk) {
+        // 이미 전송 중 → 대기 (서버가 최신 청크만 처리)
+        await Future.delayed(const Duration(milliseconds: 50));
+        continue;
+      }
+
+      final chunk = _pendingChunk!;
+      _pendingChunk = null;
+      _isSendingChunk = true;
+
+      try {
+        _ws?.sink.add(chunk);
+        debugPrint("📤 청크 전송 (${chunk.length} bytes)");
+      } catch (e) {
+        debugPrint("❌ 청크 전송 오류: $e");
+      } finally {
+        _isSendingChunk = false;
+      }
     }
   }
+
+  // ── 녹음 루프 ──────────────────────────────────────────────────
 
   Future<void> _startSensingLoop() async {
+    // 청크 전송 루프 병렬 실행
+    _sendChunkLoop();
+
     while (_isSensing) {
-      final dir = await getTemporaryDirectory();
-      final path =
-          '${dir.path}/audio_${DateTime.now().millisecondsSinceEpoch}.wav';
+      if (_isPaused) {
+        await Future.delayed(const Duration(milliseconds: 200));
+        continue;
+      }
+
+      final dir  = await getTemporaryDirectory();
+      final path = '${dir.path}/audio_${DateTime.now().millisecondsSinceEpoch}.wav';
 
       _setStatus("녹음 중...");
       await _record.start(
@@ -205,27 +286,37 @@ class _SensorAppState extends State<SensorApp> {
       await _record.stop();
 
       if (!_isSensing) {
-        final file = File(path);
-        if (await file.exists()) await file.delete();
+        final f = File(path);
+        if (await f.exists()) await f.delete();
         break;
       }
 
       if (!_isAnnouncing) {
-        _uploadAndPlayAnnouncement(path);
-      } else {
-        final file = File(path);
-        if (await file.exists()) await file.delete();
+        final bytes = await File(path).readAsBytes();
+        // 최신 청크로 교체 (이전 미전송 청크 버림)
+        if (_pendingChunk != null) {
+          debugPrint("⏭ 구 청크 버림 → 최신 청크로 교체");
+        }
+        _pendingChunk = bytes;
+        if (!_isPaused) _setStatus("실시간 감지 중...");
       }
+
+      final f = File(path);
+      if (await f.exists()) await f.delete();
     }
   }
+
+  // ── 감지 시작/중단 ─────────────────────────────────────────────
 
   void _toggleSensing() async {
     if (_isSensing) {
       setState(() {
-        _isSensing = false;
-        _statusText = "감지 중단됨";
+        _isSensing   = false;
+        _statusText  = "감지 중단됨";
+        _isPaused    = false;
       });
       await _record.stop();
+      _disconnectWs();
       return;
     }
 
@@ -236,19 +327,23 @@ class _SensorAppState extends State<SensorApp> {
     }
 
     setState(() {
-      _isSensing = true;
-      _statusText = "실시간 감지 중...";
+      _isSensing  = true;
+      _statusText = "서버 연결 중...";
     });
 
+    _connectWs();
+    await Future.delayed(const Duration(seconds: 2));
+    if (!_isSensing) return;
+
+    setState(() => _statusText = "실시간 감지 중...");
     _startSensingLoop();
   }
 
-  @override
-  void dispose() {
-    _record.dispose();
-    _audioPlayer.dispose();
-    super.dispose();
+  void _setStatus(String text) {
+    if (mounted) setState(() => _statusText = text);
   }
+
+  // ── UI ────────────────────────────────────────────────────────
 
   @override
   Widget build(BuildContext context) {
@@ -284,8 +379,27 @@ class _SensorAppState extends State<SensorApp> {
                 style: const TextStyle(fontSize: 14, color: Colors.blueGrey),
               ),
             const SizedBox(height: 4),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Icon(
+                  _wsConnected ? Icons.wifi : Icons.wifi_off,
+                  size: 14,
+                  color: _wsConnected ? Colors.green : Colors.grey,
+                ),
+                const SizedBox(width: 4),
+                Text(
+                  _wsConnected ? "연결됨" : "연결 끊김",
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: _wsConnected ? Colors.green : Colors.grey,
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 4),
             Text(
-              "서버: $kServerUrl",
+              "서버: $kServerHost",
               style: const TextStyle(fontSize: 12, color: Colors.grey),
             ),
             const SizedBox(height: 30),

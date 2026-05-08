@@ -1,17 +1,27 @@
 import { useState, useEffect, useRef, useCallback } from "react"
+import "./styles/dashboard.css"
 const VWORLD_KEY = import.meta.env.VITE_VWORLD_KEY
 console.log("VWORLD_KEY:", VWORLD_KEY)
 /* ─── 상수 ──────────────────────────────────────────────── */
 const C = {
-  bg:"#07101f", sf:"#0c1828", card:"#101f33", bd:"#162c44", bd2:"#1b3550",
-  t1:"#deeaff", t2:"#7090ae", t3:"#2d4a62",
-  green:"#34d399", amber:"#fbbf24", red:"#f87171", cyan:"#22d3ee", violet:"#a78bfa",
+  bg:"var(--sg-bg)", sf:"var(--sg-surface)", card:"var(--sg-card)", bd:"var(--sg-border)", bd2:"var(--sg-border-strong)",
+  t1:"var(--sg-text)", t2:"var(--sg-text-muted)", t3:"var(--sg-text-dim)",
+  green:"var(--sg-green)", amber:"var(--sg-amber)", red:"var(--sg-red)", cyan:"var(--sg-cyan)", violet:"var(--sg-violet)",
+  greenSoft:"var(--sg-green-soft)", greenBorder:"var(--sg-green-border)",
+  amberSoft:"var(--sg-amber-soft)", amberBorder:"var(--sg-amber-border)",
+  redSoft:"var(--sg-red-soft)", redBorder:"var(--sg-red-border)",
+  cyanSoft:"var(--sg-cyan-soft)", cyanBorder:"var(--sg-cyan-border)",
+  violetSoft:"var(--sg-violet-soft)", violetBorder:"var(--sg-violet-border)",
+  panel:"var(--sg-panel-soft)", panel2:"var(--sg-panel-muted)", panel3:"var(--sg-panel-strong)", overlay:"var(--sg-panel-overlay)",
+  mapBg:"var(--sg-map-bg)", videoBg:"var(--sg-video-bg)", primaryText:"var(--sg-primary-text)",
+  rXs:"var(--sg-radius-xs)", rSm:"var(--sg-radius-sm)", rMd:"var(--sg-radius-md)", rLg:"var(--sg-radius-lg)", rXl:"var(--sg-radius-xl)", rPill:"var(--sg-radius-pill)",
+  mono:"var(--sg-font-mono)", sans:"var(--sg-font-sans)", shadowLg:"var(--sg-shadow-lg)",
 }
 
 const STATUS_DATA = {
-  0:{ c:C.green, bg:"rgba(52,211,153,.09)",  bd:"rgba(52,211,153,.25)",  ico:"✓", tag:"현재 상태 · 정상",  name:"정상",    desc:"구역이 정상적으로 관리 중입니다" },
-  1:{ c:C.amber, bg:"rgba(251,191,36,.09)",  bd:"rgba(251,191,36,.25)",  ico:"!", tag:"현재 상태 · 경고",  name:"무단침입", desc:"비허가 인원 진입 감지 — 경고 방송 송출 중" },
-  2:{ c:C.red,   bg:"rgba(248,113,113,.09)", bd:"rgba(248,113,113,.25)", ico:"⚠", tag:"현재 상태 · 긴급", name:"위험 감지", desc:"위험 상황 감지 — 즉각 대응 필요" },
+  0:{ c:C.green, bg:C.greenSoft, bd:C.greenBorder, ico:"✓", tag:"현재 상태 · 정상",  name:"정상",    desc:"구역이 정상적으로 관리 중입니다" },
+  1:{ c:C.amber, bg:C.amberSoft, bd:C.amberBorder, ico:"!", tag:"현재 상태 · 경고",  name:"무단침입", desc:"비허가 인원 진입 감지 — 경고 방송 송출 중" },
+  2:{ c:C.red,   bg:C.redSoft,   bd:C.redBorder,   ico:"⚠", tag:"현재 상태 · 긴급", name:"위험 감지", desc:"위험 상황 감지 — 즉각 대응 필요" },
 }
 
 const LOG_COLORS = {
@@ -54,15 +64,37 @@ const DEFAULT_MSGS = {
 const genId = () => Math.random().toString(36).slice(2) + Date.now().toString(36)
 const fmt = s => `${String(Math.floor(s/60)).padStart(2,"0")}:${String(s%60).padStart(2,"0")}`
 const nowStr = () => { const d=new Date(); return [d.getHours(),d.getMinutes(),d.getSeconds()].map(v=>String(v).padStart(2,"0")).join(":") }
+const fs = size => `var(--sg-fs-${size})`
+const normalizeServerBase = (value, fallbackProtocol="http") => {
+  const raw = String(value || "localhost:8000").trim().replace(/\/+$/g, "")
+  if (/^https?:\/\//i.test(raw)) return raw
+  return `${fallbackProtocol}://${raw}`
+}
+const dashboardWsUrl = (value) => {
+  const raw = String(value || "localhost:8000").trim().replace(/\/+$/g, "")
+  if (/^wss?:\/\//i.test(raw)) return `${raw}/ws`
+  if (/^https?:\/\//i.test(raw)) {
+    const url = new URL(raw)
+    return `${url.protocol === "https:" ? "wss" : "ws"}://${url.host}/ws`
+  }
+  const protocol = typeof window !== "undefined" && window.location.protocol === "https:" ? "wss" : "ws"
+  return `${protocol}://${raw}/ws`
+}
+const normalizeZoneFromServer = (zone={}) => ({
+  ...zone,
+  id: zone.id || zone.zone_id || genId(),
+  name: zone.name || zone.zone_name || "관리구역 미지정",
+  coord: zone.coord || "",
+  label: zone.label || zone.addr || zone.address || "",
+  addr: zone.addr || zone.address || zone.label || "",
+})
+const THEME_STORAGE_KEY = "soundguard-theme"
+const getInitialTheme = () => {
+  if (typeof window === "undefined") return "dark"
+  return window.localStorage.getItem(THEME_STORAGE_KEY) || "dark"
+}
 
-/* ─── 공통 인라인 스타일 ─────────────────────────────────── */
-const inputSt = { width:"100%", background:"#060e1c", border:`1px solid ${C.bd2}`, borderRadius:6, padding:"9px 12px", color:C.t1, fontSize:13, outline:"none", fontFamily:"inherit", transition:"border-color .15s", boxSizing:"border-box" }
-const labelSt = { display:"block", fontSize:9, textTransform:"uppercase", letterSpacing:".12em", color:C.t3, fontWeight:700, marginBottom:5 }
-const btnCyanSt = { background:C.cyan, color:"#040d19", border:"none", borderRadius:7, padding:"11px 16px", fontSize:13, fontWeight:800, cursor:"pointer", width:"100%", fontFamily:"inherit" }
-const tbtnSt = { background:"none", border:"none", color:C.t2, fontSize:11, cursor:"pointer", padding:"4px 8px", borderRadius:4, fontFamily:"inherit" }
-const mcHeadSt = { padding:"7px 12px", borderBottom:`1px solid ${C.bd}`, display:"flex", alignItems:"center", justifyContent:"space-between" }
-const mctSt = { fontSize:9, textTransform:"uppercase", letterSpacing:".13em", color:C.t3, fontWeight:700 }
-
+/* ─── 공통 스타일은 styles/dashboard.css에서 관리 ───────────── */
 /* ════════════════════════════════════════════════════════════
    메인 컴포넌트
 ════════════════════════════════════════════════════════════ */
@@ -70,6 +102,7 @@ export default function SoundGuardDashboard() {
   const [screen, setScreen] = useState("login")  // "login" | "config" | "main"
   const [adminId, setAdminId] = useState("")
   const [config, setConfig] = useState({ zone:"", w1:"", w2:"", emg:"" })
+  const [theme, setTheme] = useState(getInitialTheme)
   // ─── 백엔드 연결 설정 ──────────────────────────────────────────
   // [Vite 로컬 개발] server.py를 본인 PC에서 실행 후 아래 줄 사용
   // const SERVER_IP = "localhost:8000"
@@ -84,11 +117,21 @@ export default function SoundGuardDashboard() {
     setScreen(scr)
   }, [])
 
+  const toggleTheme = useCallback(() => {
+    setTheme(prev => prev === "light" ? "dark" : "light")
+  }, [])
+
+  useEffect(() => {
+    document.body.classList.toggle("sg-theme-light", theme === "light")
+    document.body.classList.toggle("sg-theme-dark", theme !== "light")
+    window.localStorage.setItem(THEME_STORAGE_KEY, theme)
+  }, [theme])
+
   return (
-    <div style={{ minHeight:"100vh", background:C.bg, color:C.t1, fontFamily:"-apple-system,BlinkMacSystemFont,'Segoe UI',system-ui,sans-serif", fontSize:13 }}>
+    <div style={{ minHeight:"100vh", background:C.bg, color:C.t1, fontFamily:C.sans, fontSize:fs(13) }}>
       {screen === "login"  && <LoginScreen  onLogin={id => { setAdminId(id); setScreen("main") }} />}
       {screen === "config" && <ConfigScreen adminId={adminId} initConfig={config} onSave={cfg => go("main", cfg)} onBack={() => setScreen("main")} />}
-      {screen === "main"   && <MainScreen   adminId={adminId} config={config} serverIP={SERVER_IP} onGoConfig={() => setScreen("config")} onLogout={() => { setAdminId(""); setScreen("login") }} onUpdateConfig={(cfg)=>setConfig(cfg)} />}
+      {screen === "main"   && <MainScreen   adminId={adminId} config={config} serverIP={SERVER_IP} onGoConfig={() => setScreen("config")} onLogout={() => { setAdminId(""); setScreen("login") }} onUpdateConfig={(cfg)=>setConfig(cfg)} theme={theme} onToggleTheme={toggleTheme} />}
     </div>
   )
 }
@@ -117,40 +160,34 @@ function LoginScreen({ onLogin }) {
       <div style={{ width:"100%", maxWidth:390 }}>
         {/* 브랜드 */}
         <div style={{ textAlign:"center", marginBottom:28 }}>
-          <div style={{ width:90, height:90, display:"flex", alignItems:"center", justifyContent:"center", margin:"0 auto 16px" }}>
-            <img
-              src="/SoundGuardLogo_0.png"
-              alt="SoundGuard Logo"
-              style={{ width:"100%", height:"100%", objectFit:"contain" }}
-            />
-          </div>
-          <div style={{ fontSize:9, letterSpacing:".2em", textTransform:"uppercase", color:C.t3, marginBottom:7 }}>Sound Guard System</div>
-          <div style={{ fontSize:20, fontWeight:800, letterSpacing:"-.02em" }}>음향 기반 위험 예방·구조 시스템</div>
-          <div style={{ fontSize:11, color:C.t2, marginTop:5 }}>상황실 관리자 전용</div>
+          <div style={{ width:70, height:70, borderRadius:C.rXl, background:C.cyanSoft, border:`1px solid ${C.cyanBorder}`, display:"flex", alignItems:"center", justifyContent:"center", fontSize:fs(30), margin:"0 auto 16px" }}>🔊</div>
+          <div style={{ fontSize:fs(9), letterSpacing:".2em", textTransform:"uppercase", color:C.t3, marginBottom:7 }}>Sound Guard System</div>
+          <div style={{ fontSize:fs(20), fontWeight:800, letterSpacing:"-.02em" }}>음향 기반 위험 예방·구조 시스템</div>
+          <div style={{ fontSize:fs(11), color:C.t2, marginTop:5 }}>상황실 관리자 전용</div>
         </div>
 
         {/* 카드 */}
-        <div style={{ background:C.card, border:`1px solid ${C.bd2}`, borderRadius:12, padding:26 }}>
-          <div style={{ fontSize:14, fontWeight:800, marginBottom:20 }}>관리자 로그인</div>
+        <div style={{ background:C.card, border:`1px solid ${C.bd2}`, borderRadius:C.rXl, padding:26 }}>
+          <div style={{ fontSize:fs(14), fontWeight:800, marginBottom:20 }}>관리자 로그인</div>
 
           <div style={{ marginBottom:14 }}>
-            <label style={labelSt}>관리자 ID</label>
-            <input style={inputSt} type="text" placeholder="admin" value={id} onChange={e=>setId(e.target.value)} onKeyDown={e=>e.key==="Enter"&&handle()} />
+            <label className="sg-label">관리자 ID</label>
+            <input className="sg-input" type="text" placeholder="admin" value={id} onChange={e=>setId(e.target.value)} onKeyDown={e=>e.key==="Enter"&&handle()} />
           </div>
 
           <div style={{ marginBottom:20, position:"relative" }}>
-            <label style={labelSt}>비밀번호</label>
-            <input style={{...inputSt, paddingRight:52}} type={showPw?"text":"password"} placeholder="••••••••" value={pw} onChange={e=>setPw(e.target.value)} onKeyDown={e=>e.key==="Enter"&&handle()} />
-            <button onClick={()=>setShowPw(!showPw)} style={{ position:"absolute", right:10, bottom:10, background:"none", border:"none", color:C.t3, cursor:"pointer", fontSize:11, padding:4 }}>{showPw?"숨김":"표시"}</button>
+            <label className="sg-label">비밀번호</label>
+            <input className="sg-input sg-input--password" type={showPw?"text":"password"} placeholder="••••••••" value={pw} onChange={e=>setPw(e.target.value)} onKeyDown={e=>e.key==="Enter"&&handle()} />
+            <button onClick={()=>setShowPw(!showPw)} style={{ position:"absolute", right:10, bottom:10, background:"none", border:"none", color:C.t3, cursor:"pointer", fontSize:fs(11), padding:4 }}>{showPw?"숨김":"표시"}</button>
           </div>
 
-          {error && <div style={{ background:"rgba(248,113,113,.07)", border:"1px solid rgba(248,113,113,.22)", borderRadius:6, padding:"7px 11px", fontSize:11, color:C.red, marginBottom:12 }}>{error}</div>}
+          {error && <div style={{ background:C.redSoft, border:`1px solid ${C.redBorder}`, borderRadius:C.rMd, padding:"7px 11px", fontSize:fs(11), color:C.red, marginBottom:12 }}>{error}</div>}
 
-          <button style={{ ...btnCyanSt, opacity:loading?0.6:1 }} onClick={handle} disabled={loading}>
+          <button className="sg-button-primary" style={{ opacity:loading?0.6:1 }} onClick={handle} disabled={loading}>
             {loading ? "인증 중..." : "로그인"}
           </button>
 
-          <div style={{ marginTop:13, padding:8, background:"rgba(255,255,255,.025)", borderRadius:5, fontSize:10, color:C.t3, textAlign:"center" }}>
+          <div style={{ marginTop:13, padding:8, background:C.panel, borderRadius:C.rSm, fontSize:fs(10), color:C.t3, textAlign:"center" }}>
             데모 계정: ID <span style={{color:C.t2,fontWeight:700}}>admin</span> / PW <span style={{color:C.t2,fontWeight:700}}>1234</span>
           </div>
         </div>
@@ -179,72 +216,70 @@ function ConfigScreen({ adminId, initConfig, onSave, onBack }) {
     onSave({ zone: zone.trim(), w1: w1.trim(), w2: w2.trim(), emg: emg.trim() })
   }
 
-  const secSt = { background:C.card, border:`1px solid ${C.bd2}`, borderRadius:10, padding:18, marginBottom:14 }
-  const hdSt  = { fontSize:10, fontWeight:800, textTransform:"uppercase", letterSpacing:".1em", color:C.t3, marginBottom:12, display:"flex", alignItems:"center", gap:7 }
-  const numSt = (bg=C.cyan) => ({ width:18, height:18, borderRadius:"50%", display:"flex", alignItems:"center", justifyContent:"center", fontSize:9, fontWeight:800, background:bg, color:"#040d19", flexShrink:0 })
-  const exSt  = { background:"rgba(255,255,255,.025)", border:`1px solid ${C.bd}`, borderRadius:5, padding:"8px 11px", fontSize:11, color:C.t2, marginBottom:9, lineHeight:1.6 }
-  const pvSt  = { background:"rgba(34,211,238,.05)", border:"1px solid rgba(34,211,238,.15)", borderRadius:5, padding:"8px 11px", fontSize:11, color:C.cyan, marginTop:8, lineHeight:1.7 }
-  const tagSt = { fontSize:8, color:C.t3, background:"rgba(255,255,255,.04)", padding:"2px 7px", borderRadius:3, fontWeight:400, textTransform:"none", letterSpacing:".04em" }
-  const txSt  = { ...inputSt, resize:"vertical", lineHeight:1.6, minHeight:72 }
-
+  const secSt = { background:C.card, border:`1px solid ${C.bd2}`, borderRadius:C.rXl, padding:18, marginBottom:14 }
+  const hdSt  = { fontSize:fs(10), fontWeight:800, textTransform:"uppercase", letterSpacing:".1em", color:C.t3, marginBottom:12, display:"flex", alignItems:"center", gap:7 }
+  const numSt = (bg=C.cyan) => ({ width:18, height:18, borderRadius:C.rPill, display:"flex", alignItems:"center", justifyContent:"center", fontSize:fs(9), fontWeight:800, background:bg, color:C.primaryText, flexShrink:0 })
+  const exSt  = { background:C.panel, border:`1px solid ${C.bd}`, borderRadius:C.rMd, padding:"8px 11px", fontSize:fs(11), color:C.t2, marginBottom:9, lineHeight:1.6 }
+  const pvSt  = { background:C.cyanSoft, border:`1px solid ${C.cyanBorder}`, borderRadius:C.rMd, padding:"8px 11px", fontSize:fs(11), color:C.cyan, marginTop:8, lineHeight:1.7 }
+  const tagSt = { fontSize:fs(8), color:C.t3, background:C.panel2, padding:"2px 7px", borderRadius:C.rXs, fontWeight:400, textTransform:"none", letterSpacing:".04em" }
   return (
     <div style={{ display:"flex", flexDirection:"column", minHeight:"100vh" }}>
       {/* 헤더 */}
-      <div style={{ display:"flex", alignItems:"center", gap:10, padding:"10px 22px", borderBottom:`1px solid ${C.bd}`, background:"rgba(10,20,40,.95)", position:"sticky", top:0, zIndex:20 }}>
-        <div style={{ fontSize:14, fontWeight:800 }}>🔊 SoundGuard</div>
-        <div style={{ fontSize:10, color:C.t3, padding:"2px 8px", background:"rgba(255,255,255,.04)", borderRadius:4 }}>안내 멘트 설정</div>
+      <div style={{ display:"flex", alignItems:"center", gap:10, padding:"10px 22px", borderBottom:`1px solid ${C.bd}`, background:C.sf, position:"sticky", top:0, zIndex:20 }}>
+        <div style={{ fontSize:fs(14), fontWeight:800 }}>🔊 SoundGuard</div>
+        <div style={{ fontSize:fs(10), color:C.t3, padding:"2px 8px", background:C.panel2, borderRadius:C.rSm }}>안내 멘트 설정</div>
         <div style={{ marginLeft:"auto", display:"flex", alignItems:"center", gap:8 }}>
-          <span style={{ fontSize:10, color:C.t2, padding:"2px 8px", border:`1px solid ${C.bd}`, borderRadius:20 }}>{adminId}</span>
-          <button style={tbtnSt} onClick={onBack}>← 메인으로</button>
+          <span style={{ fontSize:fs(10), color:C.t2, padding:"2px 8px", border:`1px solid ${C.bd}`, borderRadius:C.rPill }}>{adminId}</span>
+          <button className="sg-text-button" onClick={onBack}>← 메인으로</button>
         </div>
       </div>
 
       {/* 바디 */}
       <div style={{ maxWidth:660, margin:"0 auto", padding:"28px 22px" }}>
-        <h1 style={{ fontSize:20, fontWeight:800, letterSpacing:"-.02em", marginBottom:5 }}>안내 멘트 설정</h1>
-        <p style={{ fontSize:12, color:C.t2, marginBottom:24, lineHeight:1.7 }}>상황별로 현장에 송출될 음성 메시지를 설정하세요. 1·2차 경고 멘트는 구역명이 자동으로 앞에 붙습니다.</p>
+        <h1 style={{ fontSize:fs(20), fontWeight:800, letterSpacing:"-.02em", marginBottom:5 }}>안내 멘트 설정</h1>
+        <p style={{ fontSize:fs(12), color:C.t2, marginBottom:24, lineHeight:1.7 }}>상황별로 현장에 송출될 음성 메시지를 설정하세요. 1·2차 경고 멘트는 구역명이 자동으로 앞에 붙습니다.</p>
 
         {/* 구역명 */}
         <div style={secSt}>
           <div style={hdSt}><span style={numSt()}>1</span> 관리 구역명</div>
-          <div style={exSt}><div style={{ fontSize:8, textTransform:"uppercase", letterSpacing:".1em", color:C.t3, marginBottom:3, fontWeight:700 }}>입력 예시</div>강변 저수지 위험구역 &nbsp;/&nbsp; 폐공사장 A구역 &nbsp;/&nbsp; 사유지 출입금지 구역</div>
-          <div style={{ marginBottom:9 }}><label style={labelSt}>구역명</label><input style={inputSt} type="text" placeholder="예: 강변 저수지 위험구역" value={zone} onChange={e=>setZone(e.target.value)} /></div>
-          <div style={pvSt}><div style={{ fontSize:8, textTransform:"uppercase", letterSpacing:".1em", color:"rgba(34,211,238,.4)", marginBottom:3, fontWeight:700 }}>첫 멘트 자동 생성</div>이곳은 <u>{z}</u> 입니다.</div>
+          <div style={exSt}><div style={{ fontSize:fs(8), textTransform:"uppercase", letterSpacing:".1em", color:C.t3, marginBottom:3, fontWeight:700 }}>입력 예시</div>강변 저수지 위험구역 &nbsp;/&nbsp; 폐공사장 A구역 &nbsp;/&nbsp; 사유지 출입금지 구역</div>
+          <div style={{ marginBottom:9 }}><label className="sg-label">구역명</label><input className="sg-input" type="text" placeholder="예: 강변 저수지 위험구역" value={zone} onChange={e=>setZone(e.target.value)} /></div>
+          <div style={pvSt}><div style={{ fontSize:fs(8), textTransform:"uppercase", letterSpacing:".1em", color:C.cyan, marginBottom:3, fontWeight:700 }}>첫 멘트 자동 생성</div>이곳은 <u>{z}</u> 입니다.</div>
         </div>
 
         {/* 1차 경고 */}
         <div style={secSt}>
           <div style={hdSt}><span style={numSt(C.amber)}>2</span> 1차 경고 멘트 <span style={tagSt}>5초 이상 체류 감지 시</span></div>
-          <div style={exSt}><div style={{ fontSize:8, textTransform:"uppercase", letterSpacing:".1em", color:C.t3, marginBottom:3, fontWeight:700 }}>작성 예시</div>{DEFAULT_MSGS.w1}</div>
+          <div style={exSt}><div style={{ fontSize:fs(8), textTransform:"uppercase", letterSpacing:".1em", color:C.t3, marginBottom:3, fontWeight:700 }}>작성 예시</div>{DEFAULT_MSGS.w1}</div>
           <div style={{ marginBottom:9 }}>
-            <label style={labelSt}>앞에 자동 삽입: <span style={{color:C.cyan}}>"{pfx}"</span></label>
-            <textarea style={txSt} placeholder="이후 경고 문구를 입력하세요..." rows={3} value={w1} onChange={e=>setW1(e.target.value)} />
+            <label className="sg-label">앞에 자동 삽입: <span style={{color:C.cyan}}>"{pfx}"</span></label>
+            <textarea className="sg-input sg-input--textarea" placeholder="이후 경고 문구를 입력하세요..." rows={3} value={w1} onChange={e=>setW1(e.target.value)} />
           </div>
-          <div style={pvSt}><div style={{ fontSize:8, textTransform:"uppercase", letterSpacing:".1em", color:"rgba(34,211,238,.4)", marginBottom:3, fontWeight:700 }}>전체 송출 메시지 미리보기</div>{pv1}</div>
+          <div style={pvSt}><div style={{ fontSize:fs(8), textTransform:"uppercase", letterSpacing:".1em", color:C.cyan, marginBottom:3, fontWeight:700 }}>전체 송출 메시지 미리보기</div>{pv1}</div>
         </div>
 
         {/* 2차 경고 */}
         <div style={secSt}>
           <div style={hdSt}><span style={numSt(C.red)}>3</span> 2차 경고 멘트 <span style={tagSt}>15초 이상 체류 감지 시</span></div>
-          <div style={exSt}><div style={{ fontSize:8, textTransform:"uppercase", letterSpacing:".1em", color:C.t3, marginBottom:3, fontWeight:700 }}>작성 예시</div>{DEFAULT_MSGS.w2}</div>
+          <div style={exSt}><div style={{ fontSize:fs(8), textTransform:"uppercase", letterSpacing:".1em", color:C.t3, marginBottom:3, fontWeight:700 }}>작성 예시</div>{DEFAULT_MSGS.w2}</div>
           <div style={{ marginBottom:9 }}>
-            <label style={labelSt}>앞에 자동 삽입: <span style={{color:C.cyan}}>"{pfx}"</span></label>
-            <textarea style={txSt} placeholder="이후 경고 문구를 입력하세요..." rows={3} value={w2} onChange={e=>setW2(e.target.value)} />
+            <label className="sg-label">앞에 자동 삽입: <span style={{color:C.cyan}}>"{pfx}"</span></label>
+            <textarea className="sg-input sg-input--textarea" placeholder="이후 경고 문구를 입력하세요..." rows={3} value={w2} onChange={e=>setW2(e.target.value)} />
           </div>
-          <div style={pvSt}><div style={{ fontSize:8, textTransform:"uppercase", letterSpacing:".1em", color:"rgba(34,211,238,.4)", marginBottom:3, fontWeight:700 }}>전체 송출 메시지 미리보기</div>{pv2}</div>
+          <div style={pvSt}><div style={{ fontSize:fs(8), textTransform:"uppercase", letterSpacing:".1em", color:C.cyan, marginBottom:3, fontWeight:700 }}>전체 송출 메시지 미리보기</div>{pv2}</div>
         </div>
 
         {/* 응급 */}
         <div style={secSt}>
           <div style={hdSt}><span style={numSt(C.violet)}>4</span> 응급 상황 안내 멘트 <span style={tagSt}>위험 감지 시</span></div>
-          <div style={exSt}><div style={{ fontSize:8, textTransform:"uppercase", letterSpacing:".1em", color:C.t3, marginBottom:3, fontWeight:700 }}>작성 예시</div>{DEFAULT_MSGS.emg}</div>
+          <div style={exSt}><div style={{ fontSize:fs(8), textTransform:"uppercase", letterSpacing:".1em", color:C.t3, marginBottom:3, fontWeight:700 }}>작성 예시</div>{DEFAULT_MSGS.emg}</div>
           <div style={{ marginBottom:9 }}>
-            <textarea style={txSt} placeholder="응급 상황 안내 문구를 입력하세요..." rows={3} value={emg} onChange={e=>setEmg(e.target.value)} />
+            <textarea className="sg-input sg-input--textarea" placeholder="응급 상황 안내 문구를 입력하세요..." rows={3} value={emg} onChange={e=>setEmg(e.target.value)} />
           </div>
-          <div style={pvSt}><div style={{ fontSize:8, textTransform:"uppercase", letterSpacing:".1em", color:"rgba(34,211,238,.4)", marginBottom:3, fontWeight:700 }}>전체 송출 메시지 미리보기</div>{pvE}</div>
+          <div style={pvSt}><div style={{ fontSize:fs(8), textTransform:"uppercase", letterSpacing:".1em", color:C.cyan, marginBottom:3, fontWeight:700 }}>전체 송출 메시지 미리보기</div>{pvE}</div>
         </div>
 
-        <button style={{ ...btnCyanSt, padding:13, fontSize:14, marginTop:6 }} onClick={save}>저장 후 모니터링 시작 →</button>
+        <button className="sg-button-primary sg-button-primary--large" style={{ marginTop:6 }} onClick={save}>저장 후 모니터링 시작 →</button>
       </div>
     </div>
   )
@@ -281,25 +316,25 @@ function MentEditOverlay({ config, onUpdateConfig, onClose, wsRef }) {
   }
 
   return (
-    <div style={{ background:C.bg, width:600, maxHeight:"90vh", overflowY:"auto", borderRadius:12, border:`1px solid ${C.bd2}`, display:"flex", flexDirection:"column" }}>
+    <div style={{ background:C.bg, width:600, maxHeight:"90vh", overflowY:"auto", borderRadius:C.rXl, border:`1px solid ${C.bd2}`, display:"flex", flexDirection:"column" }}>
       <div style={{ padding:"16px 20px", borderBottom:`1px solid ${C.bd}`, background:C.sf, display:"flex", justifyContent:"space-between", alignItems:"center", position:"sticky", top:0, zIndex:10 }}>
-        <div style={{ fontSize:16, fontWeight:800, color:C.cyan }}>🚨 수정 창 🚨</div>
-        <button style={tbtnSt} onClick={onClose}>✕ 닫기</button>
+        <div style={{ fontSize:fs(16), fontWeight:800, color:C.cyan }}>🚨 수정 창 🚨</div>
+        <button className="sg-text-button" onClick={onClose}>✕ 닫기</button>
       </div>
       <div style={{ padding:"24px" }}>
         <div style={{ marginBottom:16 }}>
-          <label style={labelSt}>1차 경고 멘트 수정</label>
-          <textarea style={{...inputSt, minHeight:72, resize:"vertical"}} value={w1} onChange={e=>setW1(e.target.value)} />
+          <label className="sg-label">1차 경고 멘트 수정</label>
+          <textarea className="sg-input sg-input--textarea" value={w1} onChange={e=>setW1(e.target.value)} />
         </div>
         <div style={{ marginBottom:16 }}>
-          <label style={labelSt}>2차 경고 멘트 수정</label>
-          <textarea style={{...inputSt, minHeight:72, resize:"vertical"}} value={w2} onChange={e=>setW2(e.target.value)} />
+          <label className="sg-label">2차 경고 멘트 수정</label>
+          <textarea className="sg-input sg-input--textarea" value={w2} onChange={e=>setW2(e.target.value)} />
         </div>
         <div style={{ marginBottom:24 }}>
-          <label style={labelSt}>위험 감지 응급 멘트 수정</label>
-          <textarea style={{...inputSt, minHeight:72, resize:"vertical"}} value={emg} onChange={e=>setEmg(e.target.value)} />
+          <label className="sg-label">위험 감지 응급 멘트 수정</label>
+          <textarea className="sg-input sg-input--textarea" value={emg} onChange={e=>setEmg(e.target.value)} />
         </div>
-        <button style={btnCyanSt} onClick={save}>수정 내용 적용하기</button>
+        <button className="sg-button-primary" onClick={save}>수정 내용 적용하기</button>
       </div>
     </div>
   )
@@ -308,17 +343,29 @@ function MentEditOverlay({ config, onUpdateConfig, onClose, wsRef }) {
 /* ════════════════════════════════════════════════════════════
    SCREEN 3: 메인 대시보드
 ════════════════════════════════════════════════════════════ */
-function MainScreen({ adminId, config, serverIP, onGoConfig, onLogout, onUpdateConfig }) {
+function MainScreen({ adminId, config, serverIP, onGoConfig, onLogout, onUpdateConfig, theme, onToggleTheme }) {
   const [status,   setStatus]   = useState(0)
   const [zoneStatusMap, setZoneStatusMap] = useState({})
   const [pausedZones, setPausedZones] = useState({})
   const [detected, setDetected] = useState(false)
   const [elapsed,  setElapsed]  = useState(0)
   const [personEl, setPersonEl] = useState(0)
-  const [beats,    setBeats]    = useState({ background:99, speech:0, footsteps:0, interaction:0, impact_noise:0, emergency:0 })
-  const [beatsTs,  setBeatsTs]  = useState("—")
-  const [lastSnd,  setLastSnd]  = useState("—")
+  const [beats,    setBeats]    = useState({ background:0, speech:0, footsteps:0, interaction:0, impact_noise:0, emergency:0 })
+  const [beatsTs,  setBeatsTs]  = useState("대기")
+  const [lastSnd,  setLastSnd]  = useState("서버 연결 대기")
   const [curMsg,   setCurMsg]   = useState(null)
+  const [decisionMeta, setDecisionMeta] = useState({
+    situationName: "대기",
+    source: "대기",
+    reason: "서버 분석 결과를 기다리는 중입니다",
+    action: "감시 대기",
+    beatsLabel: "—",
+    beatsRawLabel: "—",
+    sttText: "",
+    ttsKey: "NONE",
+    emergencyConfirmed: false,
+    timestamp: "대기",
+  })
   const [logsByZone, setLogsByZone] = useState({})
   const [clock,    setClock]    = useState(nowStr())
   const wsRef = useRef(null)
@@ -343,6 +390,37 @@ function MainScreen({ adminId, config, serverIP, onGoConfig, onLogout, onUpdateC
   const [notifications, setNotifications] = useState([])
   const [selfCheckRunning, setSelfCheckRunning] = useState(false)
   const [selfCheckResult, setSelfCheckResult] = useState(null)
+  const [sidebarExpanded, setSidebarExpanded] = useState({
+    status: false,
+    health: false,
+    zone: false,
+    detection: false,
+    logs: false,
+  })
+
+  const toggleSidebarSection = useCallback((key) => {
+    setSidebarExpanded(prev => ({ ...prev, [key]: !prev[key] }))
+  }, [])
+
+  useEffect(() => {
+    if (status !== 0) {
+      setCctvLatchedActive(true)
+      setCctvAlertStatus(status)
+    }
+  }, [status])
+
+  useEffect(() => {
+    if (!cctvPopupOpen) return
+
+    const timer = setInterval(() => {
+      if (cctvWindowRef.current && cctvWindowRef.current.closed) {
+        cctvWindowRef.current = null
+        setCctvPopupOpen(false)
+      }
+    }, 500)
+
+    return () => clearInterval(timer)
+  }, [cctvPopupOpen])
 
   const statusRef  = useRef(status)
   const pausedRef  = useRef(false)
@@ -358,7 +436,8 @@ function MainScreen({ adminId, config, serverIP, onGoConfig, onLogout, onUpdateC
   mapAddrRef.current = mapAddr
 
   const startTime = useRef(nowStr())
-  const API_BASE = `http://${serverIP}`
+  const API_BASE = normalizeServerBase(serverIP)
+  const DASHBOARD_WS_URL = dashboardWsUrl(serverIP)
   const ZONE_LABELS = ["산", "공사장", "저수지", "강", "논"]
 
   /* 구역 */
@@ -384,13 +463,14 @@ function MainScreen({ adminId, config, serverIP, onGoConfig, onLogout, onUpdateC
     fetch(`${API_BASE}/api/zones`)
       .then(r => r.json())
       .then(data => {
-        setZones(data)
-        if (data.length > 0 && !selectedZoneId) {
-          const first = data[0]
+        const serverZones = Array.isArray(data) ? data.map(normalizeZoneFromServer) : []
+        setZones(serverZones)
+        if (serverZones.length > 0 && !selectedZoneId) {
+          const first = serverZones[0]
           setSelectedZoneId(first.id)
           onUpdateConfig({ ...configRef.current, zone: first.name })
           setMapCoord(first.coord || "37.5665° N, 126.9780° E")
-          setMapAddr(first.label || "")
+          setMapAddr(first.addr || first.label || "")
         }
       })
       .catch(() => {})
@@ -402,34 +482,28 @@ function MainScreen({ adminId, config, serverIP, onGoConfig, onLogout, onUpdateC
       setSelectedZoneId(firstZone.id)
       onUpdateConfig({ ...configRef.current, zone: firstZone.name })
       setMapCoord(firstZone.coord || "37.5665° N, 126.9780° E")
-      setMapAddr(firstZone.label || "")
-      if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
-        wsRef.current.send(JSON.stringify({
-          type: "zone_select",
-          zone_id: firstZone.id,
-          zone_name: firstZone.name,
-        }))
-      }
+      setMapAddr(firstZone.addr || firstZone.label || "")
     }
   }, [selectedZoneId, zones])
 
   const selectZone = (zone) => {
-    setSelectedZoneId(zone.id)
-    onUpdateConfig({ ...configRef.current, zone: zone.name })
-    setMapCoord(zone.coord || "37.5665° N, 126.9780° E")
-    setMapAddr(zone.label || "")
+    const nextZone = normalizeZoneFromServer(zone)
+    setSelectedZoneId(nextZone.id)
+    onUpdateConfig({ ...configRef.current, zone: nextZone.name })
+    setMapCoord(nextZone.coord || "37.5665° N, 126.9780° E")
+    setMapAddr(nextZone.addr || nextZone.label || "")
 
     if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
       wsRef.current.send(JSON.stringify({
         type: "zone_select",
-        zone_id: zone.id,
-        zone_name: zone.name,
-        coord: zone.coord,
-        addr: zone.label,
+        zone_id: nextZone.id,
+        zone_name: nextZone.name,
+        coord: nextZone.coord,
+        addr: nextZone.addr || nextZone.label,
       }))
     }
 
-    addLog("sys", "구역 변경", `${zone.name} (${zone.label || "미분류"})`)
+    addLog("sys", "구역 변경", `${nextZone.name} (${nextZone.addr || nextZone.label || "미분류"})`)
   }
 
   const addZone = () => {
@@ -447,8 +521,9 @@ function MainScreen({ adminId, config, serverIP, onGoConfig, onLogout, onUpdateC
     })
       .then(r => r.json())
       .then(saved => {
-        setZones(prev => [...prev, saved])
-        selectZone(saved)
+        const normalized = normalizeZoneFromServer(saved)
+        setZones(prev => [...prev, normalized])
+        selectZone(normalized)
       })
       .catch(() => {
         setZones(prev => [...prev, next])
@@ -476,16 +551,17 @@ function MainScreen({ adminId, config, serverIP, onGoConfig, onLogout, onUpdateC
   const saveEditZone = () => {
     if (!editingZoneId || !editName.trim()) return
     const updated = { name: editName.trim(), label: editLabel, coord: editCoord.trim() }
+    const normalized = normalizeZoneFromServer({ id: editingZoneId, ...updated })
     fetch(`${API_BASE}/api/zones/${editingZoneId}`, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(updated),
     }).catch(() => {})
-    setZones(prev => prev.map(z => z.id === editingZoneId ? { ...z, ...updated } : z))
+    setZones(prev => prev.map(z => z.id === editingZoneId ? { ...z, ...normalized } : z))
     if (selectedZoneId === editingZoneId) {
       onUpdateConfig({ ...configRef.current, zone: updated.name })
       setMapCoord(updated.coord || mapCoord)
-      setMapAddr(editLabel)
+      setMapAddr(normalized.addr || normalized.label)
     }
     setEditingZoneId(null)
   }
@@ -586,11 +662,29 @@ function MainScreen({ adminId, config, serverIP, onGoConfig, onLogout, onUpdateC
           id: z.id,
           name: z.name,
           coord: z.coord,
-          addr: z.addr,
+          addr: z.addr || z.label || "",
         })),
       }))
     }
   }, [])
+
+  const sendSelectedZoneToServer = useCallback((zone) => {
+    if (!zone || !wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return
+    wsRef.current.send(JSON.stringify({
+      type: "zone_select",
+      zone_id: zone.id,
+      zone_name: zone.name,
+      coord: zone.coord,
+      addr: zone.addr || zone.label || "",
+    }))
+  }, [])
+
+  useEffect(() => {
+    const selected = zones.find(z => z.id === selectedZoneId)
+    if (!selected) return
+    sendZonesSync()
+    sendSelectedZoneToServer(selected)
+  }, [selectedZoneId, zones, sendZonesSync, sendSelectedZoneToServer])
 
   const pushOtherZoneNotification = useCallback((payload) => {
     const zoneId = payload.zone_id || payload.zoneId
@@ -607,6 +701,11 @@ function MainScreen({ adminId, config, serverIP, onGoConfig, onLogout, onUpdateC
        "warn1")
 
     const type = payload.situation === 2 || kind === "emergency" ? 2 : 1
+
+    setZoneStatusMap(prev => ({
+      ...prev,
+      [zoneId]: type,
+    }))
 
     setNotifications(prev => [{
       id: Date.now() + Math.random(),
@@ -631,12 +730,12 @@ function MainScreen({ adminId, config, serverIP, onGoConfig, onLogout, onUpdateC
     let closed = false
 
     const connect = () => {
-      const ws = new WebSocket(`ws://${serverIP}/ws`)
+      const ws = new WebSocket(DASHBOARD_WS_URL)
       wsRef.current = ws
 
       ws.onopen = () => {
         console.log("✅ 서버 연결 성공")
-        addLog("sys", "백엔드 연결 성공", `ws://${serverIP}/ws`)
+        addLog("sys", "백엔드 연결 성공", DASHBOARD_WS_URL)
         sendTtsConfig()
         sendZonesSync()
 
@@ -649,14 +748,14 @@ function MainScreen({ adminId, config, serverIP, onGoConfig, onLogout, onUpdateC
           setSelectedZoneId(currentZone.id)
           onUpdateConfig({ ...configRef.current, zone: currentZone.name })
           setMapCoord(currentZone.coord)
-          setMapAddr(currentZone.addr)
+          setMapAddr(currentZone.addr || currentZone.label || "")
 
           ws.send(JSON.stringify({
             type: "zone_select",
             zone_id: currentZone.id,
             zone_name: currentZone.name,
             coord: currentZone.coord,
-            addr: currentZone.addr,
+            addr: currentZone.addr || currentZone.label || "",
           }))
         }
       }
@@ -671,7 +770,10 @@ function MainScreen({ adminId, config, serverIP, onGoConfig, onLogout, onUpdateC
         }
 
         if (data.type === "status") {
-          if (data.message === "paused") setPaused(true)
+          if (data.message === "paused") {
+            const zId = data.zone_id || selectedZoneIdRef.current || "default"
+            setPausedZones(prev => ({ ...prev, [zId]: true }))
+          }
           return
         }
 
@@ -681,14 +783,6 @@ function MainScreen({ adminId, config, serverIP, onGoConfig, onLogout, onUpdateC
           addLog("sys", data.paused ? "감지 일시정지 적용" : "감지 재개 적용", "백엔드 반영 완료")
           return
         }
-        if (data.type === "zones_updated") {
-          fetch(`${API_BASE}/api/zones`)
-            .then(r => r.json())
-            .then(updated => setZones(updated))
-            .catch(() => {})
-          return
-        }
-
         if (data.type === "self_check_result") {
           setSelfCheckRunning(false)
           setSelfCheckResult(data.items || [])
@@ -698,12 +792,23 @@ function MainScreen({ adminId, config, serverIP, onGoConfig, onLogout, onUpdateC
         if (data.type && data.type !== "analysis") return
 
         const situation = Number(data.situation ?? 0)
+        const rawIncomingZoneId =
+          data.zone_id ||
+          data.zoneId ||
+          selectedZoneIdRef.current
+        const incomingZoneId =
+          !rawIncomingZoneId || rawIncomingZoneId === "default"
+            ? (selectedZoneIdRef.current || "default")
+            : rawIncomingZoneId
 
-        // 구역별 상태 지도 업데이트 (다중 포인트 지도용)
-        const incomingZoneId = data.zone_id || data.zoneId || selectedZoneIdRef.current
         if (incomingZoneId) {
-          setZoneStatusMap(prev => ({ ...prev, [incomingZoneId]: situation }))
+          setZoneStatusMap(prev => ({
+            ...prev,
+            [incomingZoneId]: situation,
+          }))
         }
+
+        if (incomingZoneId && selectedZoneIdRef.current && incomingZoneId !== selectedZoneIdRef.current) return
 
         if (true) {
           setStatus(situation)
@@ -728,6 +833,18 @@ function MainScreen({ adminId, config, serverIP, onGoConfig, onLogout, onUpdateC
           })
           const rawSoundLabel = data.stt_text?.trim() ? "speech" : (data.beats_raw_label || data.beats_label || "—")
           setLastSnd(SOUND_LABEL_TEXT[rawSoundLabel] || rawSoundLabel)
+          setDecisionMeta({
+            situationName: data.situation_name || STATUS_DATA[situation]?.name || "분석 결과",
+            source: data.decision_source || "rule",
+            reason: data.reason || "",
+            action: data.action || "",
+            beatsLabel: SOUND_LABEL_TEXT[data.beats_label] || data.beats_label || "—",
+            beatsRawLabel: SOUND_LABEL_TEXT[data.beats_raw_label] || data.beats_raw_label || "—",
+            sttText: data.stt_text || "",
+            ttsKey: data.tts_key || "NONE",
+            emergencyConfirmed: emergencyActive,
+            timestamp: data.timestamp || nowStr(),
+          })
         }
 
         const activeZone = zonesRef.current.find(z => z.id === selectedZoneIdRef.current)
@@ -821,6 +938,24 @@ function MainScreen({ adminId, config, serverIP, onGoConfig, onLogout, onUpdateC
 
       ws.onclose = () => {
         if (closed) return
+        setStatus(0)
+        setDetected(false)
+        setCurMsg(null)
+        setDecisionMeta({
+          situationName: "대기",
+          source: "연결 끊김",
+          reason: "백엔드 연결이 끊겨 재연결을 기다리는 중입니다",
+          action: "재연결 대기",
+          beatsLabel: "—",
+          beatsRawLabel: "—",
+          sttText: "",
+          ttsKey: "NONE",
+          emergencyConfirmed: false,
+          timestamp: "연결 끊김",
+        })
+        setBeats({ background:0, speech:0, footsteps:0, interaction:0, impact_noise:0, emergency:0 })
+        setBeatsTs("연결 끊김")
+        setLastSnd("서버 연결 끊김")
         addLog("sys", "백엔드 연결 끊김", "3초 후 재연결")
         reconnectRef.current = setTimeout(connect, 3000)
       }
@@ -1026,30 +1161,41 @@ function MainScreen({ adminId, config, serverIP, onGoConfig, onLogout, onUpdateC
       return
     }
     const videoUrl = new URL(cctvVideoSrc, window.location.origin).href
-    const accentColor = cctvStatus === 2 ? "#f87171" : "#fbbf24"
+    const accentColor = cctvStatus === 2 ? "var(--sg-red)" : "var(--sg-amber)"
     const statusText = cctvStatus === 2 ? "위험 감지" : "무단침입 감지"
     popup.document.open()
     popup.document.write(`
       <!doctype html><html lang="ko">
         <head><meta charset="utf-8" /><title>SoundGuard CCTV</title>
           <style>
+            :root {
+              --sg-popup-fs-11: 11px; --sg-popup-fs-12: 12px; --sg-popup-fs-13: 13px;
+              --sg-font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+              --sg-video-bg: #020711; --sg-text: #deeaff; --sg-text-muted: #7090ae;
+              --sg-border: #162c44; --sg-cyan: #22d3ee; --sg-cyan-border: rgba(34,211,238,.35);
+              --sg-red: #f87171; --sg-amber: #fbbf24; --sg-header-bg: rgba(7,14,28,.98);
+              --sg-panel-muted: rgba(255,255,255,.05); --sg-panel-overlay: rgba(2,7,17,.82);
+              --sg-radius-md: 6px; --sg-radius-lg: 8px; --sg-radius-pill: 999px;
+            }
+            @media (max-width: 1280px) { :root { --sg-popup-fs-11: 10px; --sg-popup-fs-12: 11px; --sg-popup-fs-13: 12px; } }
+            @media (min-width: 1600px) { :root { --sg-popup-fs-11: 12px; --sg-popup-fs-12: 13px; --sg-popup-fs-13: 14px; } }
             * { box-sizing: border-box; }
-            html, body { width:100%; height:100%; margin:0; background:#020711; color:#deeaff; font-family:-apple-system,sans-serif; overflow:hidden; }
+            html, body { width:100%; height:100%; margin:0; background:var(--sg-video-bg); color:var(--sg-text); font-family:var(--sg-font-sans); overflow:hidden; }
             .wrap { width:100%; height:100%; display:flex; flex-direction:column; }
-            .bar { height:44px; display:flex; align-items:center; gap:10px; padding:0 14px; background:rgba(7,14,28,.98); border-bottom:1px solid #162c44; flex-shrink:0; }
-            .dot { width:8px; height:8px; border-radius:50%; background:${accentColor}; box-shadow:0 0 14px ${accentColor}; }
-            .title { font-size:13px; font-weight:900; color:${accentColor}; }
-            .status { font-size:11px; color:#7090ae; }
+            .bar { height:44px; display:flex; align-items:center; gap:10px; padding:0 14px; background:var(--sg-header-bg); border-bottom:1px solid var(--sg-border); flex-shrink:0; }
+            .dot { width:8px; height:8px; border-radius:var(--sg-radius-pill); background:${accentColor}; box-shadow:0 0 14px ${accentColor}; }
+            .title { font-size:var(--sg-popup-fs-13); font-weight:900; color:${accentColor}; }
+            .status { font-size:var(--sg-popup-fs-11); color:var(--sg-text-muted); }
             .spacer { margin-left:auto; }
-            .control { background:rgba(255,255,255,.05); border:1px solid #162c44; border-radius:6px; padding:6px 10px; color:#deeaff; cursor:pointer; font-size:11px; font-weight:800; }
-            .control:hover { border-color:#22d3ee; color:#fff; }
+            .control { background:var(--sg-panel-muted); border:1px solid var(--sg-border); border-radius:var(--sg-radius-md); padding:6px 10px; color:var(--sg-text); cursor:pointer; font-size:var(--sg-popup-fs-11); font-weight:800; }
+            .control:hover { border-color:var(--sg-cyan); color:#fff; }
             .viewer { position:relative; width:100%; flex:1; min-height:0; }
-            .fcbtn { position:absolute; right:14px; bottom:14px; background:rgba(2,7,17,.82); border:1px solid rgba(34,211,238,.35); border-radius:7px; padding:8px 12px; color:#deeaff; cursor:pointer; font-size:12px; font-weight:900; }
-            .fcbtn:hover { border-color:#22d3ee; }
+            .fcbtn { position:absolute; right:14px; bottom:14px; background:var(--sg-panel-overlay); border:1px solid var(--sg-cyan-border); border-radius:var(--sg-radius-lg); padding:8px 12px; color:var(--sg-text); cursor:pointer; font-size:var(--sg-popup-fs-12); font-weight:900; }
+            .fcbtn:hover { border-color:var(--sg-cyan); }
             .exit-fs { display:none; }
             :fullscreen .enter-fs { display:none; }
             :fullscreen .exit-fs { display:block; }
-            video { width:100%; height:100%; object-fit:cover; display:block; background:#000; }
+            video { width:100%; height:100%; object-fit:cover; display:block; background:var(--sg-video-bg); }
           </style>
         </head>
         <body>
@@ -1113,173 +1259,319 @@ function MainScreen({ adminId, config, serverIP, onGoConfig, onLogout, onUpdateC
   const { lat, lon } = parseCoord(mapCoord)
   const selectedZone = zones.find(z => z.id === selectedZoneId)
   const currentZoneName = selectedZone?.name || config.zone || "관리구역 미지정"
+  const zonesForMap = zones.length > 0
+    ? zones.map(z => ({
+        id: z.id,
+        name: z.name,
+        coord: z.coord,
+        addr: z.addr || z.label || "",
+        status: z.id === selectedZoneId ? status : (zoneStatusMap[z.id] ?? 0),
+        selected: z.id === selectedZoneId,
+      }))
+    : [{
+        id: "default",
+        name: currentZoneName,
+        coord: mapCoord || `${lat}, ${lon}`,
+        addr: mapAddr || "관할 구역 주소 미상",
+        status,
+        selected: true,
+      }]
+  const mapPayloadZones = zonesForMap.map(z =>
+    z.id === "default" ? { ...z, addr: mapAddr || "관할 구역 주소 미상" } : z
+  )
   const mapSrc =
-    `/map.html?zones=${encodeURIComponent(
-      JSON.stringify(
-        zones.map(z => ({
-          id: z.id,
-          name: z.name,
-          coord: z.coord,
-          addr: z.addr || z.label || "",
-          status: zoneStatusMap[z.id] ?? 0,
-          selected: z.id === selectedZoneId,
-        }))
-      )
-    )}` +
+    `/map.html?zones=${encodeURIComponent(JSON.stringify(mapPayloadZones))}` +
     `&key=${encodeURIComponent(VWORLD_KEY || "")}`
+  
 
-  const hdrSt = { display:"flex", alignItems:"center", gap:8, padding:"9px 16px", borderBottom:`1px solid ${C.bd}`, background:"rgba(7,14,28,.96)", flexShrink:0, flexWrap:"wrap", rowGap:6 }
-  const chipSt = { fontSize:10, color:C.t3, padding:"3px 8px", background:"rgba(255,255,255,.025)", border:`1px solid ${C.bd}`, borderRadius:4, display:"flex", alignItems:"center", gap:4, whiteSpace:"nowrap" }
-  const mBtnSt = { background:"none", border:`1px solid ${C.bd}`, borderRadius:5, padding:"4px 9px", color:C.t2, cursor:"pointer", fontSize:10, fontFamily:"inherit", whiteSpace:"nowrap" }
-  const cardSt = { background:C.card, border:`1px solid ${C.bd}`, borderRadius:8, overflow:"hidden" }
-  const modalOverlay = { position:"absolute", top:0, left:0, right:0, bottom:0, background:"rgba(0,0,0,0.7)", display:"flex", alignItems:"center", justifyContent:"center", zIndex:100, backdropFilter:"blur(2px)" }
   const mapPanelSt = {
-    ...cardSt, flex:1, display:"grid",
-    gridTemplateColumns: cctvVisible ? `minmax(0,1fr) 10px minmax(260px,${cctvWidthPercent}%)` : "1fr",
-    position:"relative", background:"#0a1424", minHeight:0,
+    flex:1, display:"grid",
+    gridTemplateColumns: "1fr",
+    position:"relative", background:C.mapBg, minHeight:0,
   }
   const mapAreaSt = { position:"relative", minWidth:0, minHeight:0, overflow:"hidden" }
   const resizeHandleSt = {
     position:"relative", zIndex:4, cursor:"col-resize",
-    background:"linear-gradient(90deg, rgba(22,44,68,.85), rgba(34,211,238,.22), rgba(22,44,68,.85))",
+    background:`linear-gradient(90deg, ${C.bd}, ${C.cyanSoft}, ${C.bd})`,
     borderLeft:`1px solid ${C.bd}`, borderRight:`1px solid ${C.bd}`,
     display:"flex", alignItems:"center", justifyContent:"center", touchAction:"none",
   }
-  const resizeGripSt = { width:2, height:44, borderRadius:2, background:"rgba(222,234,255,.45)", boxShadow:"0 0 12px rgba(34,211,238,.35)" }
-  const cctvAreaSt = { position:"relative", minWidth:0, minHeight:0, overflow:"hidden", background:"#020711" }
+  const resizeGripSt = { width:2, height:44, borderRadius:C.rXs, background:C.t2, boxShadow:`0 0 12px ${C.cyanBorder}` }
+  const cctvAreaSt = { position:"relative", minWidth:0, minHeight:0, overflow:"hidden", background:C.videoBg }
+  const bottomLayoutSt = cctvVisible
+    ? { display:"grid", gridTemplateColumns:"minmax(540px,1fr) minmax(360px,36%)", gap:10, minHeight:300, maxHeight:"42%", flexShrink:0, minWidth:0 }
+    : { display:"grid", gridTemplateColumns:"1fr", gap:10, flexShrink:0, minHeight:230, minWidth:0 }
+  const bottomLeftLayoutSt = {
+    display:"grid",
+    gridTemplateColumns:cctvVisible ? "minmax(230px,.85fr) minmax(280px,1fr)" : "minmax(300px,.85fr) minmax(420px,1.35fr)",
+    gap:10,
+    minWidth:0,
+    minHeight:0,
+  }
+  const bottomInsightStackSt = { display:"flex", flexDirection:"column", gap:10, minWidth:0, minHeight:0 }
+  const cctvBottomAreaSt = { ...cctvAreaSt, minHeight:260, height:"100%" }
+  const soundItems = [
+    { key:"background", label:"배경음", value:Number(beats.background || 0), color:C.green },
+    { key:"speech", label:"사람 목소리", value:Number(beats.speech || 0), color:C.cyan },
+    { key:"footsteps", label:"발소리", value:Number(beats.footsteps || 0), color:C.amber },
+    { key:"interaction", label:"문소리", value:Number(beats.interaction || 0), color:C.violet },
+    { key:"impact_noise", label:"충격음", value:Number(beats.impact_noise || 0), color:C.red },
+    { key:"emergency", label:"응급음", value:Number(beats.emergency || 0), color:C.red },
+  ]
+  const dominantSound = soundItems.reduce((best, item) => item.value > best.value ? item : best, soundItems[0])
+  const dominantSoundValue = Math.round(Math.max(0, Math.min(100, Number(dominantSound.value) || 0)))
+  const decisionBadgeText =
+    status === 2 ? "위험 감지" :
+    status === 1 ? "무단침입 후보" :
+    "정상 관제"
+  const sttDisplay = decisionMeta.sttText?.trim() || "없음"
+  const responseStateText =
+    curMsg ? curMsg.type :
+    status === 2 ? "위험 상황 확인 중" :
+    status === 1 ? "경고 조건 확인 중" :
+    "송출 대기"
+  const sidebarStatusMetrics = [
+    ["STATUS", sd.name, sd.c],
+    ["ELAPSED", status !== 0 ? fmt(elapsed) : "00:00", status !== 0 ? sd.c : C.t2],
+    ["LAST SOUND", lastSnd, C.cyan],
+    ["MODE", paused ? "PAUSED" : "AUTO", paused ? C.amber : C.green],
+  ]
+  const sidebarHealthItems = [
+    ["AI", "ONLINE", C.green],
+    ["MIC", paused ? "HOLD" : "READY", paused ? C.amber : C.green],
+    ["STT", "READY", C.cyan],
+    ["CCTV", cctvVisible ? "ACTIVE" : "STBY", cctvVisible ? C.amber : C.t2],
+  ]
+  const visibleHealthItems = sidebarExpanded.health ? sidebarHealthItems : sidebarHealthItems.slice(0, 2)
+  const zoneInfoRows = [
+    ["구역명", currentZoneName || "—", () => setZoneModal(true)],
+    ["감지 장치", "마이크 #1", null],
+    ["모니터링 시작", startTime.current, null],
+  ]
+  const visibleZoneInfoRows = sidebarExpanded.zone ? zoneInfoRows : zoneInfoRows.slice(0, 1)
+  const visibleLogs = sidebarExpanded.logs ? logs : logs.slice(0, 2)
 
   return (
     <div style={{ display:"flex", flexDirection:"column", height:"100vh", overflow:"hidden", position:"relative" }}>
 
       {/* ── 헤더 ── */}
-      <div style={hdrSt}>
+      <div className="sg-dashboard-header">
         <div style={{ display:"flex", alignItems:"center", gap:8 }}>
-          <div style={{ display:"flex", alignItems:"center", gap:6, fontSize:14, fontWeight:800, whiteSpace:"nowrap" }}>
-            <img
-              src="/SoundGuardLogo.png"
-              alt="SoundGuard Logo"
-              style={{ width:34, height:34, objectFit:"contain" }}
-            />
-            SoundGuard
-          </div>
-          <div style={{ fontSize:10, color:C.t2, padding:"3px 10px", background:"rgba(255,255,255,.04)", border:`1px solid ${C.bd}`, borderRadius:20, maxWidth:200, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>
+          <div style={{ fontSize:fs(14), fontWeight:800, whiteSpace:"nowrap" }}>🔊 SoundGuard</div>
+          <div style={{ fontSize:fs(10), color:C.t2, padding:"3px 10px", background:C.panel2, border:`1px solid ${C.bd}`, borderRadius:C.rPill, maxWidth:200, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>
             {config.zone || "관리구역 미지정"}
           </div>
-          <div style={chipSt}>👤 {adminId}</div>
+          <div className="sg-chip">👤 {adminId}</div>
         </div>
 
         <div style={{ marginLeft:"auto", display:"flex", alignItems:"center", gap:5, flexWrap:"wrap" }}>
-          <button onClick={togglePause} style={{ ...mBtnSt, color:paused?C.green:C.amber, borderColor:paused?"rgba(52,211,153,.3)":"rgba(251,191,36,.3)", background:paused?"rgba(52,211,153,.07)":"rgba(251,191,36,.07)" }}>
+          <button className="sg-mini-button" onClick={togglePause} style={{ color:paused?C.green:C.amber, borderColor:paused?C.greenBorder:C.amberBorder, background:paused?C.greenSoft:C.amberSoft }}>
             {paused ? "▶ 감지 재개" : "⏸ 감지 일시정지"}
           </button>
-          <button onClick={() => setMentPopup(true)} style={{ ...mBtnSt, color:C.t1, background:"rgba(255,255,255,.05)" }}>
+          <button className="sg-mini-button" onClick={() => setMentPopup(true)} style={{ color:C.t1, background:C.panel2 }}>
             📝 안내멘트 설정
           </button>
           <button
             onClick={() => setNotifPanelOpen(p => !p)}
-            style={{ ...mBtnSt, position:"relative", color: unreadCount > 0 ? C.cyan : C.t2, borderColor: unreadCount > 0 ? "rgba(34,211,238,.3)" : C.bd, background: unreadCount > 0 ? "rgba(34,211,238,.07)" : "none" }}
+            className="sg-mini-button"
+            style={{ position:"relative", color: unreadCount > 0 ? C.cyan : C.t2, borderColor: unreadCount > 0 ? C.cyanBorder : C.bd, background: unreadCount > 0 ? C.cyanSoft : "none" }}
           >
             🔔 알림
             {unreadCount > 0 && (
-              <span style={{ marginLeft:5, background:C.red, color:"#fff", borderRadius:10, fontSize:9, fontWeight:800, padding:"1px 5px", lineHeight:"15px", display:"inline-block", verticalAlign:"middle" }}>
+              <span style={{ marginLeft:5, background:C.red, color:"#fff", borderRadius:C.rPill, fontSize:fs(9), fontWeight:800, padding:"1px 5px", lineHeight:"15px", display:"inline-block", verticalAlign:"middle" }}>
                 {unreadCount}
               </span>
             )}
           </button>
-          <button style={{ ...mBtnSt }} onClick={() => setSettingsModal(true)}>⚙ 설정</button>
+          <button className="sg-mini-button" onClick={() => setSettingsModal(true)}>⚙ 설정</button>
+          <button
+            className="sg-mini-button sg-theme-toggle"
+            onClick={onToggleTheme}
+            title="화면 테마 전환"
+          >
+            {theme === "light" ? "다크 모드" : "라이트 모드"}
+          </button>
         </div>
       </div>
 
       {/* ── 바디 ── */}
-      <div style={{ display:"grid", gridTemplateColumns:"280px 1fr", flex:1, overflow:"hidden", minHeight:0 }}>
+      <div style={{ display:"grid", gridTemplateColumns:"300px 1fr", flex:1, overflow:"hidden", minHeight:0 }}>
 
         {/* 좌측 패널 */}
-        <div style={{ overflowY:"auto", padding:12, display:"flex", flexDirection:"column", gap:10, borderRight:`1px solid ${C.bd}` }}>
+        <div className="sg-sidebar" style={{ overflowY:"auto", padding:12, display:"flex", flexDirection:"column", gap:10, borderRight:`1px solid ${C.bd}` }}>
+
+          <div className="sg-sidebar-node">
+            <div>
+              <div className="sg-sidebar-kicker">CONTROL NODE</div>
+              <div className="sg-sidebar-node-title">{currentZoneName || "관리구역 미지정"}</div>
+            </div>
+            <span
+              className="sg-sidebar-live"
+              style={{
+                color: paused ? C.amber : C.green,
+                borderColor: paused ? C.amberBorder : C.greenBorder,
+                background: paused ? C.amberSoft : C.greenSoft,
+              }}
+            >
+              {paused ? "PAUSED" : "LIVE"}
+            </span>
+          </div>
 
           {/* 상태 배너 */}
-          <div style={{ borderRadius:10, border:`1px solid ${sd.bd}`, background:sd.bg, padding:"14px", display:"flex", flexDirection:"column", alignItems:"center", textAlign:"center", gap:8, transition:"background .4s,border-color .4s", flexShrink:0 }}>
-            <div style={{ width:44, height:44, borderRadius:10, background:"rgba(255,255,255,.06)", display:"flex", alignItems:"center", justifyContent:"center", fontSize:22, color:sd.c }}>{sd.ico}</div>
-            <div>
-              <div style={{ fontSize:9, textTransform:"uppercase", letterSpacing:".15em", fontWeight:700, color:sd.c, marginBottom:3 }}>{sd.tag}</div>
-              <div style={{ fontSize:20, fontWeight:800, letterSpacing:"-.02em", color:sd.c }}>{sd.name}</div>
-              <div style={{ fontSize:11, color:C.t2, marginTop:2 }}>{sd.desc}</div>
-            </div>
-            {status !== 0 && (
-              <div style={{ marginTop:6 }}>
-                <div style={{ fontSize:8, textTransform:"uppercase", letterSpacing:".1em", color:C.t3 }}>발생 후 경과</div>
-                <div style={{ fontSize:22, fontWeight:800, fontFamily:"'Courier New',monospace", color:sd.c }}>{fmt(elapsed)}</div>
+          <div className="sg-sidebar-status" style={{ borderColor:sd.bd, background:sd.bg, color:sd.c }}>
+            <div className="sg-sidebar-status-top">
+              <div style={{ width:38, height:38, borderRadius:C.rMd, background:C.panel3, display:"flex", alignItems:"center", justifyContent:"center", fontSize:fs(20), color:sd.c, flexShrink:0 }}>{sd.ico}</div>
+              <div className="sg-sidebar-status-copy">
+                <div style={{ fontSize:fs(8), textTransform:"uppercase", letterSpacing:".15em", fontWeight:700, color:sd.c, marginBottom:3 }}>{sd.tag}</div>
+                <div style={{ fontSize:fs(18), fontWeight:800, letterSpacing:"-.02em", color:sd.c }}>{sd.name}</div>
+                {sidebarExpanded.status && <div style={{ fontSize:fs(11), color:C.t2, marginTop:2 }}>{sd.desc}</div>}
               </div>
+              <button
+                className="sg-sidebar-toggle"
+                onClick={() => toggleSidebarSection("status")}
+                aria-expanded={sidebarExpanded.status}
+              >
+                {sidebarExpanded.status ? "간단히" : "자세히"}
+              </button>
+            </div>
+            {sidebarExpanded.status && (
+              <>
+                {status !== 0 && (
+                  <div style={{ marginTop:6 }}>
+                    <div style={{ fontSize:fs(8), textTransform:"uppercase", letterSpacing:".1em", color:C.t3 }}>발생 후 경과</div>
+                    <div style={{ fontSize:fs(22), fontWeight:800, fontFamily:C.mono, color:sd.c }}>{fmt(elapsed)}</div>
+                  </div>
+                )}
+                <div className="sg-sidebar-status-grid">
+                  {sidebarStatusMetrics.map(([label, value, color]) => (
+                    <div className="sg-sidebar-metric" key={label}>
+                      <div className="sg-sidebar-metric-label">{label}</div>
+                      <div className="sg-sidebar-metric-value" style={{ color }}>{value}</div>
+                    </div>
+                  ))}
+                </div>
+              </>
             )}
           </div>
 
+          <div className="sg-card sg-sidebar-card" style={{ flexShrink:0 }}>
+            <div className="sg-panel-head">
+              <span className="sg-panel-title">SYSTEM HEALTH</span>
+              <button
+                className="sg-sidebar-toggle"
+                onClick={() => toggleSidebarSection("health")}
+                aria-expanded={sidebarExpanded.health}
+              >
+                {sidebarExpanded.health ? "간단히" : "자세히"}
+              </button>
+            </div>
+            <div className="sg-health-grid">
+              {visibleHealthItems.map(([label, value, color]) => (
+                <div className="sg-health-item" key={label}>
+                  <span className="sg-health-dot" style={{ background:color, boxShadow:`0 0 10px ${color}` }} />
+                  <span className="sg-health-label">{label}</span>
+                  <span className="sg-health-value" style={{ color }}>{value}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+
           {/* 구역 정보 */}
-          <div style={{ ...cardSt, flexShrink:0 }}>
-            <div style={mcHeadSt}><span style={mctSt}>📍 구역 정보</span></div>
+          <div className="sg-card sg-sidebar-card" style={{ flexShrink:0 }}>
+            <div className="sg-panel-head">
+              <span className="sg-panel-title">📍 구역 정보</span>
+              <button
+                className="sg-sidebar-toggle"
+                onClick={() => toggleSidebarSection("zone")}
+                aria-expanded={sidebarExpanded.zone}
+              >
+                {sidebarExpanded.zone ? "간단히" : "자세히"}
+              </button>
+            </div>
             <div style={{ display:"flex", flexDirection:"column" }}>
-              {[
-                ["구역명", currentZoneName||"—", () => setZoneModal(true)],
-                ["감지 장치", "마이크 #1", null],
-                ["모니터링 시작", startTime.current, null],
-              ].map(([l, v, handler]) => (
+              {visibleZoneInfoRows.map(([l, v, handler]) => (
                 <div
                   key={l}
                   style={{ padding:"10px 12px", borderBottom:`1px solid ${C.bd}`, cursor: handler ? "pointer" : "default", transition:"background-color 0.2s" }}
-                  onMouseOver={e => { if(handler) { e.currentTarget.style.backgroundColor="rgba(34,211,238,.15)"; e.currentTarget.children[1].style.color=C.cyan } }}
+                  onMouseOver={e => { if(handler) { e.currentTarget.style.backgroundColor=C.cyanSoft; e.currentTarget.children[1].style.color=C.cyan } }}
                   onMouseOut={e => { if(handler) { e.currentTarget.style.backgroundColor="transparent"; e.currentTarget.children[1].style.color=C.t1 } }}
                   onClick={() => handler && handler()}
                 >
-                  <div style={{ fontSize:8, textTransform:"uppercase", letterSpacing:".12em", color:C.t3, marginBottom:4, fontWeight:700 }}>{l}</div>
-                  <div style={{ fontSize:12, fontWeight:700, transition:"color 0.2s" }}>{v}</div>
+                  <div style={{ fontSize:fs(8), textTransform:"uppercase", letterSpacing:".12em", color:C.t3, marginBottom:4, fontWeight:700 }}>{l}</div>
+                  <div style={{ fontSize:fs(12), fontWeight:700, transition:"color 0.2s" }}>{v}</div>
                 </div>
               ))}
             </div>
           </div>
 
           {/* 감지된 인물 */}
-          <div style={{ ...cardSt, flexShrink:0 }}>
-            <div style={mcHeadSt}>
-              <span style={mctSt}>👤 감지된 인물</span>
-              <span style={{ fontSize:8, padding:"2px 6px", border:`1px solid ${detected?"rgba(251,191,36,.28)":C.bd}`, borderRadius:3, fontWeight:700, background:detected?"rgba(251,191,36,.1)":"rgba(255,255,255,.04)", color:detected?C.amber:C.t3 }}>{detected?"감지 중":"미감지"}</span>
+          <div className="sg-card sg-sidebar-card" style={{ flexShrink:0 }}>
+            <div className="sg-panel-head">
+              <span className="sg-panel-title">👤 감지된 인물</span>
+              <div className="sg-panel-actions">
+                <span style={{ fontSize:fs(8), padding:"2px 6px", border:`1px solid ${detected?C.amberBorder:C.bd}`, borderRadius:C.rXs, fontWeight:700, background:detected?C.amberSoft:C.panel2, color:detected?C.amber:C.t3 }}>{detected?"감지 중":"미감지"}</span>
+                <button
+                  className="sg-sidebar-toggle"
+                  onClick={() => toggleSidebarSection("detection")}
+                  aria-expanded={sidebarExpanded.detection}
+                >
+                  {sidebarExpanded.detection ? "간단히" : "자세히"}
+                </button>
+              </div>
             </div>
             <div style={{ padding:"10px 12px" }}>
-              <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:10 }}>
-                <div style={{ position:"relative", width:9, height:9, borderRadius:"50%", background:detected?C.amber:C.t3, flexShrink:0 }} />
+              <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:sidebarExpanded.detection ? 10 : 0 }}>
+                <div style={{ position:"relative", width:9, height:9, borderRadius:C.rPill, background:detected?C.amber:C.t3, flexShrink:0 }} />
                 <div>
-                  <div style={{ fontSize:12, fontWeight:700 }}>{detected?"인원 감지됨":"감지 없음"}</div>
-                  <div style={{ fontSize:10, color:C.t2, marginTop:1 }}>{detected?"구역 내 비허가 인원 존재":"현재 구역 내 인원 없음"}</div>
+                  <div style={{ fontSize:fs(12), fontWeight:700 }}>{detected?"인원 감지됨":"감지 없음"}</div>
+                  <div style={{ fontSize:fs(10), color:C.t2, marginTop:1 }}>{detected?"구역 내 비허가 인원 존재":"현재 구역 내 인원 없음"}</div>
                 </div>
               </div>
-              <div style={{ display:"flex", flexDirection:"column", gap:6 }}>
-                {[["구역 내 체류", fmt(personEl)], ["마지막 감지음", lastSnd]].map(([l,v])=>(
-                  <div key={l} style={{ background:"rgba(255,255,255,.03)", borderRadius:5, padding:"7px 9px", display:"flex", justifyContent:"space-between", alignItems:"center" }}>
-                    <div style={{ fontSize:8, textTransform:"uppercase", letterSpacing:".1em", color:C.t3, fontWeight:700 }}>{l}</div>
-                    <div style={{ fontSize:11, fontWeight:700, fontFamily:"'Courier New',monospace" }}>{v}</div>
-                  </div>
-                ))}
-              </div>
+              {sidebarExpanded.detection && (
+                <div style={{ display:"flex", flexDirection:"column", gap:6 }}>
+                  {[["구역 내 체류", fmt(personEl)], ["마지막 감지음", lastSnd]].map(([l,v])=>(
+                    <div key={l} style={{ background:C.panel, borderRadius:C.rSm, padding:"7px 9px", display:"flex", justifyContent:"space-between", alignItems:"center" }}>
+                      <div style={{ fontSize:fs(8), textTransform:"uppercase", letterSpacing:".1em", color:C.t3, fontWeight:700 }}>{l}</div>
+                      <div style={{ fontSize:fs(11), fontWeight:700, fontFamily:C.mono }}>{v}</div>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
           </div>
 
           {/* 이벤트 로그 */}
-          <div style={{ ...cardSt, flex:1, display:"flex", flexDirection:"column", minHeight:400 }}>
-            <div style={mcHeadSt}>
-              <span style={mctSt}>이벤트 로그</span>
-              <button style={{...tbtnSt, padding:"2px 6px", fontSize:9}} onClick={()=>setLogsByZone(prev=>({...prev,[_zoneKey]:[]}))}>초기화</button>
+          <div className="sg-card sg-sidebar-card sg-sidebar-log-card" style={{ flex:1, display:"flex", flexDirection:"column", minHeight:sidebarExpanded.logs ? 400 : 170 }}>
+            <div className="sg-panel-head">
+              <span className="sg-panel-title">이벤트 로그</span>
+              <div className="sg-panel-actions">
+                <button className="sg-text-button" style={{ padding:"2px 6px", fontSize:fs(9) }} onClick={()=>setLogsByZone(prev=>({...prev,[_zoneKey]:[]}))}>초기화</button>
+                <button
+                  className="sg-sidebar-toggle"
+                  onClick={() => toggleSidebarSection("logs")}
+                  aria-expanded={sidebarExpanded.logs}
+                >
+                  {sidebarExpanded.logs ? "간단히" : "자세히"}
+                </button>
+              </div>
             </div>
             <div style={{ flex:1, overflowY:"auto", padding:8 }}>
-              {logs.map(log => {
+              {visibleLogs.map(log => {
                 const lc = LOG_COLORS[log.type] || LOG_COLORS.sys
                 return (
-                  <div key={log.id} style={{ padding:"7px 9px", borderRadius:4, borderLeft:`2px solid ${lc.c}`, marginBottom:5, background:"rgba(255,255,255,.02)" }}>
+                  <div key={log.id} style={{ padding:"7px 9px", borderRadius:C.rSm, borderLeft:`2px solid ${lc.c}`, marginBottom:5, background:C.panel }}>
                     <div style={{ display:"flex", alignItems:"center", gap:6, marginBottom:2 }}>
-                      <span style={{ fontSize:8, fontWeight:800, letterSpacing:".07em", textTransform:"uppercase", color:lc.c }}>{lc.label}</span>
-                      <span style={{ fontSize:8, fontFamily:"'Courier New',monospace", color:C.t3 }}>{log.t}</span>
+                      <span style={{ fontSize:fs(8), fontWeight:800, letterSpacing:".07em", textTransform:"uppercase", color:lc.c }}>{lc.label}</span>
+                      <span style={{ fontSize:fs(8), fontFamily:C.mono, color:C.t3 }}>{log.t}</span>
                     </div>
-                    <div style={{ fontSize:11, color:C.t1 }}>{log.title}</div>
-                    {log.detail && <div style={{ fontSize:9, color:C.t3, marginTop:2, fontFamily:"'Courier New',monospace", overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{log.detail}</div>}
+                    <div style={{ fontSize:fs(11), color:C.t1 }}>{log.title}</div>
+                    {log.detail && <div style={{ fontSize:fs(9), color:C.t3, marginTop:2, fontFamily:C.mono, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{log.detail}</div>}
                   </div>
                 )
               })}
+              {logs.length === 0 && (
+                <div style={{ padding:"12px 9px", color:C.t3, fontSize:fs(10) }}>표시할 이벤트가 없습니다</div>
+              )}
             </div>
           </div>
         </div>
@@ -1288,11 +1580,11 @@ function MainScreen({ adminId, config, serverIP, onGoConfig, onLogout, onUpdateC
         <div style={{ display:"flex", flexDirection:"column", padding:12, gap:10, overflow:"hidden" }}>
 
           {/* 지도 + CCTV 분할 시각화 */}
-          <div ref={mapPanelRef} style={mapPanelSt}>
+          <div ref={mapPanelRef} className="sg-card" style={mapPanelSt}>
 
             {/* 지도 영역 */}
             <div style={mapAreaSt}>
-              <div style={{ position:"absolute", top:12, left:12, background:"rgba(10,20,40,.8)", padding:"5px 10px", borderRadius:6, border:`1px solid ${C.bd}`, fontSize:11, fontWeight:700, color:C.t1, zIndex:2 }}>
+              <div style={{ position:"absolute", top:12, left:12, background:C.overlay, padding:"5px 10px", borderRadius:C.rMd, border:`1px solid ${C.bd}`, fontSize:fs(11), fontWeight:700, color:C.t1, zIndex:2 }}>
                 🗺 현재 음성감지구역 지도
               </div>
               <iframe
@@ -1302,7 +1594,7 @@ function MainScreen({ adminId, config, serverIP, onGoConfig, onLogout, onUpdateC
                 style={{ width:"100%", height:"100%", border:"none", display:"block" }}
               />
               <div
-                style={{ position:"absolute", bottom:12, left:12, background:"rgba(10,20,40,.9)", padding:"6px 10px", borderRadius:6, border:`1px solid ${C.bd}`, fontSize:10, color:C.t2, cursor:"pointer", transition:"border-color 0.2s", zIndex:2, maxWidth:"calc(100% - 24px)" }}
+                style={{ position:"absolute", bottom:12, left:12, background:C.overlay, padding:"6px 10px", borderRadius:C.rMd, border:`1px solid ${C.bd}`, fontSize:fs(10), color:C.t2, cursor:"pointer", transition:"border-color 0.2s", zIndex:2, maxWidth:"calc(100% - 24px)" }}
                 onMouseOver={e => e.currentTarget.style.borderColor = C.cyan}
                 onMouseOut={e => e.currentTarget.style.borderColor = C.bd}
                 onClick={() => setMapInfoModal(true)}
@@ -1313,7 +1605,7 @@ function MainScreen({ adminId, config, serverIP, onGoConfig, onLogout, onUpdateC
             </div>
 
             {/* 리사이즈 핸들 */}
-            {cctvVisible && (
+            {false && cctvVisible && (
               <div
                 role="separator"
                 aria-label="지도와 CCTV 화면 크기 조절"
@@ -1326,133 +1618,211 @@ function MainScreen({ adminId, config, serverIP, onGoConfig, onLogout, onUpdateC
             )}
 
             {/* CCTV 영역 */}
-            {cctvVisible && (
+            {false && cctvVisible && (
               <div style={cctvAreaSt}>
                 <video
                   src={cctvVideoSrc}
                   autoPlay muted loop playsInline
                   style={{ width:"100%", height:"100%", objectFit:"cover", display:"block" }}
                 />
-                <div style={{ position:"absolute", top:12, left:12, display:"flex", alignItems:"center", gap:7, background:"rgba(2,7,17,.82)", border:`1px solid ${cctvStatus === 2 ? "rgba(248,113,113,.5)" : "rgba(251,191,36,.45)"}`, borderRadius:6, padding:"5px 9px", fontSize:11, fontWeight:800, color:cctvStatus === 2 ? C.red : C.amber }}>
-                  <span style={{ width:7, height:7, borderRadius:"50%", background:cctvStatus === 2 ? C.red : C.amber, boxShadow:`0 0 12px ${cctvStatus === 2 ? C.red : C.amber}` }} />
+                <div style={{ position:"absolute", top:12, left:12, display:"flex", alignItems:"center", gap:7, background:C.overlay, border:`1px solid ${cctvStatus === 2 ? C.redBorder : C.amberBorder}`, borderRadius:C.rMd, padding:"5px 9px", fontSize:fs(11), fontWeight:800, color:cctvStatus === 2 ? C.red : C.amber }}>
+                  <span style={{ width:7, height:7, borderRadius:C.rPill, background:cctvStatus === 2 ? C.red : C.amber, boxShadow:`0 0 12px ${cctvStatus === 2 ? C.red : C.amber}` }} />
                   CCTV
                 </div>
                 <button type="button" onClick={openCctvPopup}
-                  style={{ position:"absolute", top:12, right:62, background:"rgba(2,7,17,.86)", border:`1px solid ${C.bd}`, borderRadius:6, padding:"5px 9px", color:C.t1, cursor:"pointer", fontSize:10, fontWeight:800, fontFamily:"inherit" }}>
+                  style={{ position:"absolute", top:12, right:62, background:C.overlay, border:`1px solid ${C.bd}`, borderRadius:C.rMd, padding:"5px 9px", color:C.t1, cursor:"pointer", fontSize:fs(10), fontWeight:800, fontFamily:"inherit" }}>
                   팝업으로 보기
                 </button>
                 <button type="button" onClick={closeCctvView}
-                  style={{ position:"absolute", top:12, right:12, background:"rgba(248,113,113,.12)", border:"1px solid rgba(248,113,113,.35)", borderRadius:6, padding:"5px 9px", color:C.red, cursor:"pointer", fontSize:10, fontWeight:900, fontFamily:"inherit" }}
+                  style={{ position:"absolute", top:12, right:12, background:C.redSoft, border:`1px solid ${C.redBorder}`, borderRadius:C.rMd, padding:"5px 9px", color:C.red, cursor:"pointer", fontSize:fs(10), fontWeight:900, fontFamily:"inherit" }}
                   title="CCTV 분할 화면 닫기">
                   닫기
                 </button>
-                <div style={{ position:"absolute", right:12, bottom:12, background:"rgba(2,7,17,.82)", border:`1px solid ${C.bd}`, borderRadius:6, padding:"5px 9px", fontSize:10, color:C.t2 }}>
+                <div style={{ position:"absolute", right:12, bottom:12, background:C.overlay, border:`1px solid ${C.bd}`, borderRadius:C.rMd, padding:"5px 9px", fontSize:fs(10), color:C.t2 }}>
                   {cctvStatus === 2 ? "위험 감지 화면" : "무단침입 감지 화면"}
                 </div>
               </div>
             )}
           </div>
 
-          {/* BEATs */}
-          <div style={{ ...cardSt, flexShrink:0 }}>
-            <div style={mcHeadSt}>
-              <span style={mctSt}>⚡ 실시간 음향 분석</span>
-            </div>
-            <div style={{ display:"flex", gap:10, padding:"10px 12px" }}>
-              {[["배경음", beats.background, C.green], ["사람 목소리", beats.speech, C.cyan], ["발소리", beats.footsteps, C.amber], ["문소리", beats.interaction, C.violet], ["충격음", beats.impact_noise, C.red], ["응급음", beats.emergency, C.red]].map(([lbl, val, color]) =>(
-                <div key={lbl} style={{ flex:1, background:"rgba(255,255,255,.03)", borderRadius:6, padding:"8px" }}>
-                  <div style={{ fontSize:10, color:C.t2, marginBottom:5 }}>{lbl}</div>
-                  <div style={{ display:"flex", alignItems:"center", gap:6 }}>
-                    <div style={{ flex:1, height:4, background:"#05101e", borderRadius:2, overflow:"hidden" }}>
-                      <div style={{ height:"100%", borderRadius:2, background:color, width:`${val}%`, transition:"width .7s ease" }} />
+          <div style={bottomLayoutSt}>
+            <div style={bottomLeftLayoutSt}>
+              {/* 실시간 음향 분석 */}
+              <div className="sg-card sg-bottom-panel">
+                <div className="sg-panel-head">
+                  <span className="sg-panel-title">⚡ 실시간 음향 분석</span>
+                  <span className="sg-bottom-head-value">{beatsTs}</span>
+                </div>
+                <div className="sg-sound-summary">
+                  <div>
+                    <div className="sg-bottom-kicker">가장 강한 감지음</div>
+                    <div className="sg-sound-dominant" style={{ color:dominantSound.color }}>
+                      {dominantSoundValue > 0 ? dominantSound.label : "대기"}
                     </div>
-                    <div style={{ fontSize:11, fontWeight:700, fontFamily:"'Courier New',monospace", color, width:24, textAlign:"right" }}>{val}%</div>
+                  </div>
+                  <div className="sg-sound-dominant-value" style={{ color:dominantSound.color }}>
+                    {dominantSoundValue}%
                   </div>
                 </div>
-              ))}
-            </div>
-          </div>
+                <div className="sg-sound-list">
+                  {soundItems.map(item => {
+                    const pct = Math.round(Math.max(0, Math.min(100, Number(item.value) || 0)))
+                    const active = item.key === dominantSound.key && pct > 0
+                    return (
+                      <div
+                        className={`sg-sound-row ${active ? "sg-sound-row--active" : ""}`}
+                        key={item.key}
+                        style={{ "--sound-color": item.color }}
+                      >
+                        <div className="sg-sound-label">{item.label}</div>
+                        <div className="sg-sound-track">
+                          <div className="sg-sound-fill" style={{ width:`${pct}%` }} />
+                        </div>
+                        <div className="sg-sound-value">{pct}%</div>
+                      </div>
+                    )
+                  })}
+                </div>
+              </div>
 
-          {/* 현재 메시지 */}
-          <div style={{ ...cardSt, flexShrink:0 }}>
-            <div style={mcHeadSt}><span style={mctSt}>📢 현재 송출 중인 메시지</span></div>
-            <div style={{ padding:"12px" }}>
-              <div style={{ fontSize:12, color:curMsg?C.t1:C.t3, lineHeight:1.6, padding:"10px", background:"rgba(255,255,255,.03)", borderRadius:6, borderLeft:`2px solid ${curMsg?C.cyan:C.bd}`, fontStyle:curMsg?"normal":"italic" }}>
-                {curMsg ? (
-                  <>
-                    <span style={{display:"inline-block", padding:"1px 6px", background:C.cyan, color:"#000", borderRadius:3, fontSize:9, fontWeight:800, marginRight:8, verticalAlign:"middle"}}>{curMsg.type}</span>
-                    {curMsg.text}
-                  </>
-                ) : "현재 송출 중인 메시지 없음"}
+              <div style={bottomInsightStackSt}>
+                {/* 판단 근거 */}
+                <div className="sg-card sg-bottom-panel sg-decision-panel">
+                  <div className="sg-panel-head">
+                    <span className="sg-panel-title">감지 판단 요약</span>
+                    <span className="sg-status-pill" style={{ color:sd.c, borderColor:sd.bd, background:sd.bg }}>
+                      {decisionBadgeText}
+                    </span>
+                  </div>
+                  <div className="sg-decision-body">
+                    <div className="sg-decision-title" style={{ color:sd.c }}>{decisionMeta.situationName || sd.name}</div>
+                    <div className="sg-decision-reason">
+                      {decisionMeta.reason || "현재 분석 근거가 아직 수신되지 않았습니다"}
+                    </div>
+                    <div className="sg-evidence-grid">
+                      {[
+                        ["BEATs", decisionMeta.beatsRawLabel || decisionMeta.beatsLabel || "—"],
+                        ["STT", sttDisplay],
+                        ["대응", decisionMeta.action || "감시 지속"],
+                      ].map(([label, value]) => (
+                        <div className="sg-evidence-item" key={label}>
+                          <span>{label}</span>
+                          <strong>{value}</strong>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+
+                {/* 현재 메시지 */}
+                <div className="sg-card sg-bottom-panel sg-response-panel">
+                  <div className="sg-panel-head">
+                    <span className="sg-panel-title">📢 현재 대응 메시지</span>
+                    <span className="sg-bottom-head-value">{decisionMeta.ttsKey || "NONE"}</span>
+                  </div>
+                  <div className="sg-response-body">
+                    <div className="sg-response-state" style={{ color:curMsg ? C.cyan : C.t2 }}>
+                      {responseStateText}
+                    </div>
+                    <div className={`sg-response-message ${curMsg ? "" : "sg-response-message--empty"}`}>
+                      {curMsg ? curMsg.text : "현재 송출 중인 메시지 없음"}
+                    </div>
+                  </div>
+                </div>
               </div>
             </div>
+            {cctvVisible && (
+              <div className="sg-card" style={cctvBottomAreaSt}>
+                <video
+                  src={cctvVideoSrc}
+                  autoPlay muted loop playsInline
+                  style={{ width:"100%", height:"100%", objectFit:"cover", display:"block" }}
+                />
+                <div style={{ position:"absolute", top:12, left:12, display:"flex", alignItems:"center", gap:7, background:C.overlay, border:`1px solid ${cctvStatus === 2 ? C.redBorder : C.amberBorder}`, borderRadius:C.rMd, padding:"5px 9px", fontSize:fs(11), fontWeight:800, color:cctvStatus === 2 ? C.red : C.amber }}>
+                  <span style={{ width:7, height:7, borderRadius:C.rPill, background:cctvStatus === 2 ? C.red : C.amber, boxShadow:`0 0 12px ${cctvStatus === 2 ? C.red : C.amber}` }} />
+                  CCTV
+                </div>
+                <button type="button" onClick={openCctvPopup}
+                  style={{ position:"absolute", top:12, right:62, background:C.overlay, border:`1px solid ${C.bd}`, borderRadius:C.rMd, padding:"5px 9px", color:C.t1, cursor:"pointer", fontSize:fs(10), fontWeight:800, fontFamily:"inherit" }}>
+                  팝업으로 보기
+                </button>
+                <button type="button" onClick={closeCctvView}
+                  style={{ position:"absolute", top:12, right:12, background:C.redSoft, border:`1px solid ${C.redBorder}`, borderRadius:C.rMd, padding:"5px 9px", color:C.red, cursor:"pointer", fontSize:fs(10), fontWeight:900, fontFamily:"inherit" }}
+                  title="CCTV 화면 닫기">
+                  닫기
+                </button>
+                <div style={{ position:"absolute", right:12, bottom:12, background:C.overlay, border:`1px solid ${C.bd}`, borderRadius:C.rMd, padding:"5px 9px", fontSize:fs(10), color:C.t2 }}>
+                  {cctvStatus === 2 ? "위험 감지 화면" : "무단침입 감지 화면"}
+                </div>
+              </div>
+            )}
           </div>
         </div>
       </div>
 
       {/* ── 푸터 ── */}
-      <div style={{ borderTop:`1px solid ${C.bd}`, padding:"8px 14px", display:"flex", alignItems:"center", gap:7, flexShrink:0, background:"rgba(7,14,28,.8)" }}>
-        <div style={{ display:"flex", alignItems:"center", gap:7, fontSize:10 }}>
+      <div style={{ borderTop:`1px solid ${C.bd}`, padding:"8px 14px", display:"flex", alignItems:"center", gap:7, flexShrink:0, background:C.sf }}>
+        <div style={{ display:"flex", alignItems:"center", gap:7, fontSize:fs(10) }}>
           <span style={{ display:"inline-block", width:5, height:5, borderRadius:"50%", background:paused?C.amber:C.green }} />
           <span style={{ color:C.t3 }}>{paused ? "감지 일시정지" : "시스템 활성"}</span>
           <span style={{ color:C.t3 }}>|</span>
-          <span style={{ fontFamily:"'Courier New',monospace", fontSize:11, color:C.t2 }}>{clock}</span>
+          <span style={{ fontFamily:C.mono, fontSize:fs(11), color:C.t2 }}>{clock}</span>
         </div>
       </div>
 
       {/* ── 모달 영역 ── */}
       {mentPopup && (
-        <div style={modalOverlay}>
-          <div style={{ background:C.card, padding:24, borderRadius:12, border:`1px solid ${C.bd2}`, width:300, textAlign:"center" }}>
-            <div style={{ fontSize:16, fontWeight:800, marginBottom:20 }}>안내 멘트 설정 메뉴</div>
+        <div className="sg-modal-overlay">
+          <div style={{ background:C.card, padding:24, borderRadius:C.rXl, border:`1px solid ${C.bd2}`, width:300, textAlign:"center" }}>
+            <div style={{ fontSize:fs(16), fontWeight:800, marginBottom:20 }}>안내 멘트 설정 메뉴</div>
             <div style={{ display:"flex", flexDirection:"column", gap:10 }}>
-              <button style={{...btnCyanSt, background:C.bd, color:C.t1}} onClick={() => { setMentPopup(false); onGoConfig(); }}>초기 설정 (시스템 초기화)</button>
-              <button style={btnCyanSt} onClick={() => { setMentPopup(false); setMentEditModal(true); }}>멘트 수정 (현재 상태 유지)</button>
-              <button style={{...tbtnSt, marginTop:10}} onClick={() => setMentPopup(false)}>닫기</button>
+              <button className="sg-button-primary sg-button-primary--secondary" onClick={() => { setMentPopup(false); onGoConfig(); }}>초기 설정 (시스템 초기화)</button>
+              <button className="sg-button-primary" onClick={() => { setMentPopup(false); setMentEditModal(true); }}>멘트 수정 (현재 상태 유지)</button>
+              <button className="sg-text-button" style={{ marginTop:10 }} onClick={() => setMentPopup(false)}>닫기</button>
             </div>
           </div>
         </div>
       )}
 
       {mentEditModal && (
-        <div style={modalOverlay}>
+        <div className="sg-modal-overlay">
           <MentEditOverlay config={config} onUpdateConfig={onUpdateConfig} onClose={() => setMentEditModal(false)} wsRef={wsRef} />
         </div>
       )}
 
       {zoneModal && (
-        <div style={modalOverlay}>
-          <div style={{ background:C.card, padding:24, borderRadius:12, border:`1px solid ${C.bd2}`, width:420 }}>
-            <div style={{ fontSize:16, fontWeight:800, marginBottom:16 }}>구역 선택 및 관리</div>
+        <div className="sg-modal-overlay">
+          <div style={{ background:C.card, padding:24, borderRadius:C.rXl, border:`1px solid ${C.bd2}`, width:420 }}>
+            <div style={{ fontSize:fs(16), fontWeight:800, marginBottom:16 }}>구역 선택 및 관리</div>
 
-            <div style={{ maxHeight:220, overflowY:"auto", marginBottom:16, border:`1px solid ${C.bd}`, borderRadius:6, padding:8 }}>
+            <div style={{ maxHeight:220, overflowY:"auto", marginBottom:16, border:`1px solid ${C.bd}`, borderRadius:C.rMd, padding:8 }}>
               {zones.length === 0 && (
-                <div style={{ padding:"16px", textAlign:"center", color:C.t3, fontSize:11 }}>등록된 구역이 없습니다</div>
+                <div style={{ padding:"16px", textAlign:"center", color:C.t3, fontSize:fs(11) }}>등록된 구역이 없습니다</div>
               )}
               {zones.map(zone => (
                 <div key={zone.id} style={{ marginBottom:4 }}>
                   {editingZoneId === zone.id ? (
-                    <div style={{ background:"rgba(34,211,238,.07)", border:`1px solid ${C.cyan}`, borderRadius:6, padding:10, display:"flex", flexDirection:"column", gap:6 }}>
-                      <input style={{...inputSt, fontSize:11, padding:"6px 10px"}} value={editName} onChange={e=>setEditName(e.target.value)} placeholder="구역명" />
-                      <input style={{...inputSt, fontSize:11, padding:"6px 10px"}} value={editCoord} onChange={e=>setEditCoord(e.target.value)} placeholder="좌표 예: 37.5665, 126.9780" />
-                      <select style={{...inputSt, fontSize:11, padding:"6px 10px", cursor:"pointer"}} value={editLabel} onChange={e=>setEditLabel(e.target.value)}>
+                    <div style={{ background:C.cyanSoft, border:`1px solid ${C.cyanBorder}`, borderRadius:C.rMd, padding:10, display:"flex", flexDirection:"column", gap:6 }}>
+                      <input className="sg-input sg-input--compact" value={editName} onChange={e=>setEditName(e.target.value)} placeholder="구역명" />
+                      <input className="sg-input sg-input--compact" value={editCoord} onChange={e=>setEditCoord(e.target.value)} placeholder="좌표 예: 37.5665, 126.9780" />
+                      <select className="sg-input sg-input--compact sg-input--select" value={editLabel} onChange={e=>setEditLabel(e.target.value)}>
                         {ZONE_LABELS.map(l => <option key={l} value={l}>{l}</option>)}
                       </select>
                       <div style={{ display:"flex", gap:6 }}>
-                        <button style={{...btnCyanSt, padding:"6px 12px", fontSize:11, flex:1}} onClick={saveEditZone}>저장</button>
-                        <button style={{...tbtnSt, fontSize:11, border:`1px solid ${C.bd}`, borderRadius:5, padding:"6px 12px"}} onClick={()=>setEditingZoneId(null)}>취소</button>
+                        <button className="sg-button-primary sg-button-primary--compact" style={{ flex:1 }} onClick={saveEditZone}>저장</button>
+                        <button className="sg-text-button sg-text-button--bordered" style={{ fontSize:fs(11), padding:"6px 12px" }} onClick={()=>setEditingZoneId(null)}>취소</button>
                       </div>
                     </div>
                   ) : (
-                    <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", padding:"8px", background: zone.id === selectedZoneId ? "rgba(34,211,238,.16)" : "rgba(255,255,255,.03)", borderRadius:4, border: zone.id === selectedZoneId ? `1px solid ${C.cyan}` : "1px solid transparent" }}>
+                    <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", padding:"8px", background: zone.id === selectedZoneId ? C.cyanSoft : C.panel, borderRadius:C.rSm, border: zone.id === selectedZoneId ? `1px solid ${C.cyanBorder}` : "1px solid transparent" }}>
                       <div style={{ cursor:"pointer", flex:1 }} onClick={() => { selectZone(zone); setZoneModal(false) }}>
-                        <div style={{ fontSize:12, fontWeight:800, color:C.t1 }}>{zone.name}</div>
-                        <div style={{ fontSize:9, color:C.t3, marginTop:2 }}>{zone.coord}</div>
-                        <div style={{ fontSize:9, color:C.cyan, marginTop:1, fontWeight:700 }}>{zone.label || "미분류"}</div>
+                        <div style={{ fontSize:fs(12), fontWeight:800, color:C.t1 }}>{zone.name}</div>
+                        <div style={{ fontSize:fs(9), color:C.t3, marginTop:2 }}>{zone.coord}</div>
+                        <div style={{ fontSize:fs(9), color:C.cyan, marginTop:1, fontWeight:700 }}>{zone.label || "미분류"}</div>
                       </div>
                       <div style={{ display:"flex", gap:4 }}>
-                        <button style={{ background:"none", border:"none", color:C.t2, cursor:"pointer", fontSize:10 }} onClick={() => startEditZone(zone)}>수정</button>
-                        <button style={{ background:"none", border:"none", color:C.red, cursor:"pointer", fontSize:10 }} onClick={() => deleteZone(zone.id)}>삭제</button>
+                        <button style={{ background:"none", border:"none", color:C.t2, cursor:"pointer", fontSize:fs(10) }} onClick={() => startEditZone(zone)}>수정</button>
+                        <button style={{ background:"none", border:"none", color:C.red, cursor:"pointer", fontSize:fs(10) }} onClick={() => deleteZone(zone.id)}>삭제</button>
                       </div>
                     </div>
                   )}
@@ -1461,42 +1831,42 @@ function MainScreen({ adminId, config, serverIP, onGoConfig, onLogout, onUpdateC
             </div>
 
             <div style={{ display:"flex", flexDirection:"column", gap:8 }}>
-              <input style={inputSt} value={newZoneName} onChange={e => setNewZoneName(e.target.value)} placeholder="새 구역명" />
+              <input className="sg-input" value={newZoneName} onChange={e => setNewZoneName(e.target.value)} placeholder="새 구역명" />
               <input
-                style={inputSt}
+                className="sg-input"
                 value={newZoneCoord}
                 onChange={e => setNewZoneCoord(e.target.value)}
                 onKeyDown={e => { if (e.key === "Enter") applyNewZoneLocationInput(e.target.value) }}
                 placeholder="좌표만 입력 예: 37.5665, 126.9780 (Enter로 검색)"
               />
               <input
-                style={inputSt}
+                className="sg-input"
                 value={newZoneAddr}
                 onChange={e => setNewZoneAddr(e.target.value)}
                 onKeyDown={e => { if (e.key === "Enter") applyNewZoneLocationInput(e.target.value) }}
                 placeholder="주소 또는 장소명 예: 인하대학교 (Enter로 좌표 자동입력)"
               />
-              <select style={{...inputSt, cursor:"pointer"}} value={newZoneLabel} onChange={e => setNewZoneLabel(e.target.value)}>
+              <select className="sg-input sg-input--select" value={newZoneLabel} onChange={e => setNewZoneLabel(e.target.value)}>
                 {ZONE_LABELS.map(l => <option key={l} value={l}>{l}</option>)}
               </select>
-              <button style={{...btnCyanSt, width:"100%"}} onClick={addZone}>추가</button>
+              <button className="sg-button-primary" onClick={addZone}>추가</button>
             </div>
 
             <div style={{ textAlign:"right", marginTop:16 }}>
-              <button style={{...btnCyanSt, width:"auto", background:C.bd, color:C.t1}} onClick={() => setZoneModal(false)}>닫기</button>
+              <button className="sg-button-primary sg-button-primary--secondary sg-button-primary--auto" onClick={() => setZoneModal(false)}>닫기</button>
             </div>
           </div>
         </div>
       )}
 
       {mapInfoModal && (
-        <div style={modalOverlay}>
-          <div style={{ background:C.card, padding:24, borderRadius:12, border:`1px solid ${C.bd2}`, width:320 }}>
-            <div style={{ fontSize:16, fontWeight:800, marginBottom:16 }}>지도 위치 설정</div>
+        <div className="sg-modal-overlay">
+          <div style={{ background:C.card, padding:24, borderRadius:C.rXl, border:`1px solid ${C.bd2}`, width:320 }}>
+            <div style={{ fontSize:fs(16), fontWeight:800, marginBottom:16 }}>지도 위치 설정</div>
             <div style={{ marginBottom:12 }}>
-              <label style={labelSt}>GPS 좌표</label>
+              <label className="sg-label">GPS 좌표</label>
               <input
-                style={inputSt}
+                className="sg-input"
                 value={mapCoord}
                 onChange={e => setMapCoord(e.target.value)}
                 onKeyDown={e => { if (e.key === "Enter") applyCoordInput(e.target.value) }}
@@ -1504,9 +1874,9 @@ function MainScreen({ adminId, config, serverIP, onGoConfig, onLogout, onUpdateC
               />
             </div>
             <div style={{ marginBottom:20 }}>
-              <label style={labelSt}>주소</label>
+              <label className="sg-label">주소</label>
               <input
-                style={inputSt}
+                className="sg-input"
                 value={mapAddr}
                 onChange={e => setMapAddr(e.target.value)}
                 onKeyDown={e => { if (e.key === "Enter") applyLocationInput(e.target.value) }}
@@ -1515,7 +1885,7 @@ function MainScreen({ adminId, config, serverIP, onGoConfig, onLogout, onUpdateC
             </div>
             <div style={{ display:"flex", gap:10 }}>
               <button
-                style={{...btnCyanSt, background:C.bd, color:C.t1}}
+                className="sg-button-primary sg-button-primary--secondary"
                 onClick={() => {
                   if (selectedZoneId) {
                     setZones(prev => prev.map(z => z.id === selectedZoneId ? { ...z, coord: mapCoord, addr: mapAddr } : z))
@@ -1535,42 +1905,42 @@ function MainScreen({ adminId, config, serverIP, onGoConfig, onLogout, onUpdateC
       {notifPanelOpen && (
         <>
           <div style={{ position:"fixed", inset:0, zIndex:149 }} onClick={() => setNotifPanelOpen(false)} />
-          <div style={{ position:"fixed", top:48, right:10, width:310, maxHeight:400, background:C.card, border:`1px solid ${C.bd2}`, borderRadius:10, zIndex:150, display:"flex", flexDirection:"column", boxShadow:"0 10px 40px rgba(0,0,0,.6)", overflow:"hidden" }}>
+          <div style={{ position:"fixed", top:48, right:10, width:310, maxHeight:400, background:C.card, border:`1px solid ${C.bd2}`, borderRadius:C.rXl, zIndex:150, display:"flex", flexDirection:"column", boxShadow:C.shadowLg, overflow:"hidden" }}>
             <div style={{ padding:"9px 14px", borderBottom:`1px solid ${C.bd}`, display:"flex", justifyContent:"space-between", alignItems:"center", flexShrink:0 }}>
-              <span style={{ fontSize:12, fontWeight:800, color:C.t1 }}>🔔 다른 구역 알림</span>
+              <span style={{ fontSize:fs(12), fontWeight:800, color:C.t1 }}>🔔 다른 구역 알림</span>
               <div style={{ display:"flex", gap:4 }}>
                 {unreadCount > 0 && (
-                  <button style={{...tbtnSt, fontSize:10}} onClick={() => setNotifications(prev => prev.map(n => ({...n, read:true})))}>모두 읽음</button>
+                  <button className="sg-text-button" style={{ fontSize:fs(10) }} onClick={() => setNotifications(prev => prev.map(n => ({...n, read:true})))}>모두 읽음</button>
                 )}
-                <button style={{...tbtnSt, fontSize:11}} onClick={() => setNotifPanelOpen(false)}>✕</button>
+                <button className="sg-text-button" style={{ fontSize:fs(11) }} onClick={() => setNotifPanelOpen(false)}>✕</button>
               </div>
             </div>
             <div style={{ overflowY:"auto", flex:1 }}>
               {notifications.length === 0 ? (
-                <div style={{ padding:"28px 16px", textAlign:"center", color:C.t3, fontSize:11 }}>다른 관리구역의 알림이 없습니다</div>
+                <div style={{ padding:"28px 16px", textAlign:"center", color:C.t3, fontSize:fs(11) }}>다른 관리구역의 알림이 없습니다</div>
               ) : (
                 notifications.map(n => (
                   <div
                     key={n.id}
-                    style={{ padding:"10px 14px", borderBottom:`1px solid ${C.bd}`, cursor:"pointer", background: n.read ? "transparent" : "rgba(34,211,238,.04)", transition:"background .15s" }}
+                    style={{ padding:"10px 14px", borderBottom:`1px solid ${C.bd}`, cursor:"pointer", background: n.read ? "transparent" : C.cyanSoft, transition:"background .15s" }}
                     onClick={() => switchToZone(n)}
-                    onMouseOver={e => e.currentTarget.style.background="rgba(255,255,255,.05)"}
-                    onMouseOut={e => e.currentTarget.style.background = n.read ? "transparent" : "rgba(34,211,238,.04)"}
+                    onMouseOver={e => e.currentTarget.style.background=C.panel2}
+                    onMouseOut={e => e.currentTarget.style.background = n.read ? "transparent" : C.cyanSoft}
                   >
                     <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:4 }}>
                       <div style={{ display:"flex", alignItems:"center", gap:6 }}>
-                        <span style={{ fontSize:9, fontWeight:800, color: n.type===2 ? C.red : C.amber }}>
+                        <span style={{ fontSize:fs(9), fontWeight:800, color: n.type===2 ? C.red : C.amber }}>
                           {n.kind === "emergency" ? "⚠ 응급상황" : n.kind === "warn2" ? "! 2차 경고" : "! 1차 경고"}
                         </span>
-                        <span style={{ fontSize:9, color:C.t3 }}>·</span>
-                        <span style={{ fontSize:9, color:C.t2, fontWeight:700 }}>{n.zoneName}</span>
+                        <span style={{ fontSize:fs(9), color:C.t3 }}>·</span>
+                        <span style={{ fontSize:fs(9), color:C.t2, fontWeight:700 }}>{n.zoneName}</span>
                       </div>
                       {!n.read && <span style={{ width:6, height:6, borderRadius:"50%", background:C.cyan, display:"inline-block", flexShrink:0 }} />}
                     </div>
-                    <div style={{ fontSize:11, color:C.t1, marginBottom:3 }}>{n.message}</div>
+                    <div style={{ fontSize:fs(11), color:C.t1, marginBottom:3 }}>{n.message}</div>
                     <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center" }}>
-                      <span style={{ fontSize:9, color:C.t3, fontFamily:"'Courier New',monospace" }}>{n.time}</span>
-                      <span style={{ fontSize:9, color:C.cyan }}>구역 전환 →</span>
+                      <span style={{ fontSize:fs(9), color:C.t3, fontFamily:C.mono }}>{n.time}</span>
+                      <span style={{ fontSize:fs(9), color:C.cyan }}>구역 전환 →</span>
                     </div>
                   </div>
                 ))
@@ -1582,39 +1952,39 @@ function MainScreen({ adminId, config, serverIP, onGoConfig, onLogout, onUpdateC
 
       {/* ── 설정 모달 ── */}
       {settingsModal && (
-        <div style={modalOverlay} onClick={e => e.target === e.currentTarget && setSettingsModal(false)}>
-          <div style={{ background:C.card, borderRadius:12, border:`1px solid ${C.bd2}`, width:360, overflow:"hidden" }}>
+        <div className="sg-modal-overlay" onClick={e => e.target === e.currentTarget && setSettingsModal(false)}>
+          <div style={{ background:C.card, borderRadius:C.rXl, border:`1px solid ${C.bd2}`, width:360, overflow:"hidden" }}>
             <div style={{ padding:"13px 18px", borderBottom:`1px solid ${C.bd}`, background:C.sf, display:"flex", justifyContent:"space-between", alignItems:"center" }}>
-              <span style={{ fontSize:14, fontWeight:800 }}>⚙ 시스템 설정</span>
-              <button style={tbtnSt} onClick={() => setSettingsModal(false)}>✕</button>
+              <span style={{ fontSize:fs(14), fontWeight:800 }}>⚙ 시스템 설정</span>
+              <button className="sg-text-button" onClick={() => setSettingsModal(false)}>✕</button>
             </div>
             <div style={{ padding:"18px" }}>
-              <div style={{ marginBottom:16, padding:"12px 14px", background:"rgba(255,255,255,.025)", borderRadius:8, border:`1px solid ${C.bd}` }}>
-                <div style={{ fontSize:9, textTransform:"uppercase", letterSpacing:".12em", color:C.t3, fontWeight:700, marginBottom:6 }}>현재 접속 IP</div>
-                <div style={{ fontSize:13, fontWeight:700, fontFamily:"'Courier New',monospace", color:C.cyan, display:"flex", alignItems:"center", gap:8 }}>
-                  <span style={{ display:"inline-block", width:7, height:7, borderRadius:"50%", background:C.green, flexShrink:0 }} />
+              <div style={{ marginBottom:16, padding:"12px 14px", background:C.panel, borderRadius:C.rLg, border:`1px solid ${C.bd}` }}>
+                <div style={{ fontSize:fs(9), textTransform:"uppercase", letterSpacing:".12em", color:C.t3, fontWeight:700, marginBottom:6 }}>현재 접속 IP</div>
+                <div style={{ fontSize:fs(13), fontWeight:700, fontFamily:C.mono, color:C.cyan, display:"flex", alignItems:"center", gap:8 }}>
+                  <span style={{ display:"inline-block", width:7, height:7, borderRadius:C.rPill, background:C.green, flexShrink:0 }} />
                   {serverIP}
                 </div>
               </div>
               <div style={{ marginBottom:16 }}>
-                <div style={{ fontSize:9, textTransform:"uppercase", letterSpacing:".12em", color:C.t3, fontWeight:700, marginBottom:8 }}>자가진단</div>
-                <button style={{ ...btnCyanSt, opacity:selfCheckRunning ? 0.65 : 1 }} onClick={runSelfCheck} disabled={selfCheckRunning}>
+                <div style={{ fontSize:fs(9), textTransform:"uppercase", letterSpacing:".12em", color:C.t3, fontWeight:700, marginBottom:8 }}>자가진단</div>
+                <button className="sg-button-primary" style={{ opacity:selfCheckRunning ? 0.65 : 1 }} onClick={runSelfCheck} disabled={selfCheckRunning}>
                   {selfCheckRunning ? "🔍 진단 중..." : "🔍 자가진단 실행"}
                 </button>
                 {selfCheckResult && (
-                  <div style={{ marginTop:10, background:"rgba(255,255,255,.02)", borderRadius:6, border:`1px solid ${C.bd}`, overflow:"hidden" }}>
+                  <div style={{ marginTop:10, background:C.panel, borderRadius:C.rMd, border:`1px solid ${C.bd}`, overflow:"hidden" }}>
                     {selfCheckResult.map(item => (
                       <div key={item.label} style={{ display:"flex", justifyContent:"space-between", alignItems:"center", padding:"7px 12px", borderBottom:`1px solid ${C.bd}` }}>
-                        <span style={{ fontSize:11, color:C.t2 }}>{item.label}</span>
-                        <span style={{ fontSize:11, fontWeight:800, color: item.ok ? C.green : C.red }}>{item.ok ? "✓ 정상" : "✗ 오류"}</span>
+                        <span style={{ fontSize:fs(11), color:C.t2 }}>{item.label}</span>
+                        <span style={{ fontSize:fs(11), fontWeight:800, color: item.ok ? C.green : C.red }}>{item.ok ? "✓ 정상" : "✗ 오류"}</span>
                       </div>
                     ))}
-                    <div style={{ padding:"7px 12px", fontSize:10, color:C.green, fontWeight:700 }}>모든 항목 정상</div>
+                    <div style={{ padding:"7px 12px", fontSize:fs(10), color:C.green, fontWeight:700 }}>모든 항목 정상</div>
                   </div>
                 )}
               </div>
               <div style={{ borderTop:`1px solid ${C.bd}`, paddingTop:14 }}>
-                <button style={{ ...btnCyanSt, background:"rgba(248,113,113,.08)", color:C.red, border:`1px solid rgba(248,113,113,.25)` }} onClick={() => { setSettingsModal(false); onLogout() }}>
+                <button className="sg-button-primary sg-button-primary--danger-ghost" onClick={() => { setSettingsModal(false); onLogout() }}>
                   로그아웃
                 </button>
               </div>
@@ -1623,14 +1993,7 @@ function MainScreen({ adminId, config, serverIP, onGoConfig, onLogout, onUpdateC
         </div>
       )}
 
-      <style>{`
-        @keyframes ping { 75%, 100% { transform: scale(2); opacity: 0; } }
-        ::-webkit-scrollbar { width: 6px; height: 6px; }
-        ::-webkit-scrollbar-track { background: transparent; }
-        ::-webkit-scrollbar-thumb { background: rgba(255,255,255,.15); border-radius: 3px; }
-        ::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,.3); }
-        * { scrollbar-width: thin; scrollbar-color: rgba(255,255,255,.15) transparent; }
-      `}</style>
     </div>
   )
 }
+
