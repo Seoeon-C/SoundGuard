@@ -1,83 +1,179 @@
 <!DOCTYPE html>
 <html lang="ko">
 <head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
-    html, body, #map { width: 100%; height: 100%; overflow: hidden; }
+    html, body, #map { width: 100%; height: 100%; overflow: hidden; background:#07101f; }
 
-    .pulse-marker { position: relative; width: 40px; height: 40px; }
-    .pulse-marker .dot {
-      position: absolute; top: 50%; left: 50%;
-      transform: translate(-50%, -50%);
-      width: 12px; height: 12px;
-      background: #ef4444; border-radius: 50%;
-      border: 2px solid #fff;
-      box-shadow: 0 0 6px rgba(239,68,68,0.8);
-      z-index: 2;
+    .zone-marker { position: relative; width: 34px; height: 34px; }
+    .zone-marker .dot {
+      position:absolute; top:50%; left:50%;
+      transform:translate(-50%, -50%);
+      width:12px; height:12px; border-radius:50%;
+      border:2px solid #fff; z-index:2;
     }
-    .pulse-marker .ring {
-      position: absolute; top: 50%; left: 50%;
-      transform: translate(-50%, -50%);
-      width: 36px; height: 36px;
-      border-radius: 50%;
-      border: 2px solid rgba(239,68,68,0.5);
-      animation: ring-pulse 1.8s ease-out infinite;
+    .zone-marker .ring {
+      position:absolute; top:50%; left:50%;
+      transform:translate(-50%, -50%);
+      width:32px; height:32px; border-radius:50%;
+      animation:ring-pulse 1.8s ease-out infinite;
     }
+    .zone-marker.selected .dot { width:15px; height:15px; }
+    .zone-marker.selected .ring { width:42px; height:42px; }
+
+    .zone-normal .dot { background:#34d399; box-shadow:0 0 12px rgba(52,211,153,.9); }
+    .zone-normal .ring { border:2px solid rgba(52,211,153,.45); }
+
+    .zone-warning .dot { background:#fbbf24; box-shadow:0 0 12px rgba(251,191,36,.9); }
+    .zone-warning .ring { border:2px solid rgba(251,191,36,.5); }
+
+    .zone-danger .dot { background:#f87171; box-shadow:0 0 12px rgba(248,113,113,.95); }
+    .zone-danger .ring { border:2px solid rgba(248,113,113,.55); }
+
     @keyframes ring-pulse {
-      0%   { transform: translate(-50%,-50%) scale(0.4); opacity: 1; }
-      100% { transform: translate(-50%,-50%) scale(1.6); opacity: 0; }
+      0% { transform:translate(-50%,-50%) scale(.45); opacity:1; }
+      100% { transform:translate(-50%,-50%) scale(1.7); opacity:0; }
     }
 
     .leaflet-popup-content-wrapper {
-      background: #1e293b; color: #e2e8f0;
-      border: 1px solid #334155; border-radius: 8px;
-      font-size: 0.78rem;
+      background:#1e293b; color:#e2e8f0;
+      border:1px solid #334155; border-radius:8px;
+      font-size:.78rem;
     }
-    .leaflet-popup-tip { background: #1e293b; }
-    .leaflet-popup-close-button { color: #94a3b8 !important; }
+    .leaflet-popup-tip { background:#1e293b; }
+    .leaflet-popup-close-button { color:#94a3b8 !important; }
+
+    .legend {
+      position:absolute; right:14px; bottom:12px; z-index:999;
+      background:rgba(15,23,42,.9);
+      border:1px solid rgba(148,163,184,.25);
+      border-radius:8px;
+      padding:8px 10px;
+      color:#cbd5e1;
+      font-size:11px;
+      display:flex;
+      gap:12px;
+    }
+    .legend span { display:flex; align-items:center; gap:5px; }
+    .legend i { width:9px; height:9px; border-radius:50%; display:inline-block; }
   </style>
 </head>
 <body>
   <div id="map"></div>
+  <div class="legend">
+    <span><i style="background:#34d399"></i>정상</span>
+    <span><i style="background:#fbbf24"></i>경고</span>
+    <span><i style="background:#f87171"></i>응급</span>
+  </div>
 
   <script>
-    var params = new URLSearchParams(window.location.search);
+    const params = new URLSearchParams(window.location.search);
+    const VWORLD_KEY = params.get("key") || "";
+    const rawZones = params.get("zones");
 
-    var LAT = parseFloat(params.get("lat")) || 37.5665;
-    var LON = parseFloat(params.get("lon")) || 126.9780;
-    var PLACE_NAME = params.get("name") || "관리구역 미지정";
-    var PLACE_ADDR = params.get("addr") || "관할 구역 주소 미상";
-    var STATUS = params.get("status") || "normal";
-    var VWORLD_KEY = params.get("key") || "";
+    function parseCoord(coord) {
+      const nums = String(coord || "").match(/-?\d+(\.\d+)?/g);
+      if (!nums || nums.length < 2) return null;
+      return [Number(nums[0]), Number(nums[1])];
+    }
 
-    var map = L.map('map', {
+    let zones = [];
+    try {
+      zones = rawZones ? JSON.parse(rawZones) : [];
+    } catch (e) {
+      zones = [];
+    }
+
+    const fallback = [{
+      id: "default",
+      name: params.get("name") || "관리구역 미지정",
+      addr: params.get("addr") || "관할 구역 주소 미상",
+      coord: `${params.get("lat") || 37.5665}° N, ${params.get("lon") || 126.9780}° E`,
+      status: params.get("status") === "danger" ? 2 : params.get("status") === "warning" ? 1 : 0,
+      selected: true,
+    }];
+
+    if (!zones.length) zones = fallback;
+
+    const parsedZones = zones
+      .map(z => ({ ...z, latlon: parseCoord(z.coord) }))
+      .filter(z => z.latlon);
+
+    const center = parsedZones.find(z => z.selected)?.latlon || parsedZones[0]?.latlon || [37.5665, 126.9780];
+
+    const map = L.map("map", {
       zoomControl: true,
       attributionControl: true,
-    }).setView([LAT, LON], 16);
+    }).setView(center, 15);
 
-    var base = 'https://api.vworld.kr/req/wmts/1.0.0/' + VWORLD_KEY;
-    L.tileLayer(base + '/midnight/{z}/{y}/{x}.png', { maxZoom: 19, attribution: '© VWorld' }).addTo(map);
+    const base = "https://api.vworld.kr/req/wmts/1.0.0/" + VWORLD_KEY;
+    L.tileLayer(base + "/midnight/{z}/{y}/{x}.png", {
+      maxZoom: 19,
+      attribution: "© VWorld",
+    }).addTo(map);
 
-    var pulseIcon = L.divIcon({
-      className: '',
-      html: '<div class="pulse-marker"><div class="ring"></div><div class="dot"></div></div>',
-      iconSize: [40, 40],
-      iconAnchor: [20, 20],
-      popupAnchor: [0, -20],
+    function statusClass(status) {
+      if (Number(status) === 2) return "zone-danger";
+      if (Number(status) === 1) return "zone-warning";
+      return "zone-normal";
+    }
+
+    function statusText(status) {
+      if (Number(status) === 2) return "응급";
+      if (Number(status) === 1) return "경고";
+      return "정상";
+    }
+
+    const bounds = [];
+
+    parsedZones.forEach(z => {
+      const cls = statusClass(z.status);
+      const selected = z.selected ? "selected" : "";
+
+      const icon = L.divIcon({
+        className: "",
+        html: `<div class="zone-marker ${cls} ${selected}">
+                 <div class="ring"></div>
+                 <div class="dot"></div>
+               </div>`,
+        iconSize: [42, 42],
+        iconAnchor: [21, 21],
+        popupAnchor: [0, -22],
+      });
+
+      L.marker(z.latlon, { icon })
+        .addTo(map)
+        .bindPopup(
+          `📍 ${z.name}<br>` +
+          `<small style="color:#94a3b8">${z.addr || "주소 미상"} · ${z.coord || ""}</small><br>` +
+          `<small style="color:#cbd5e1">상태: ${statusText(z.status)}</small>`
+        );
+
+      bounds.push(z.latlon);
     });
 
-    L.marker([LAT, LON], { icon: pulseIcon })
-      .addTo(map)
-      .bindPopup(
-        '📍 ' + PLACE_NAME +
-        '<br><small style="color:#94a3b8">' +
-        PLACE_ADDR + ' · ' + LAT + '° N, ' + LON + '° E</small>'
-      )
-      .openPopup();
+    if (bounds.length >= 2) {
+      map.fitBounds(bounds, { padding: [45, 45], maxZoom: 15 });
+    } else if (bounds.length === 1) {
+      map.setView(bounds[0], 16);
+    }
+
+    const selectedZone = parsedZones.find(z => z.selected);
+    if (selectedZone) {
+      map.eachLayer(layer => {
+        if (layer instanceof L.Marker) {
+          const ll = layer.getLatLng();
+          if (Math.abs(ll.lat - selectedZone.latlon[0]) < 0.000001 &&
+              Math.abs(ll.lng - selectedZone.latlon[1]) < 0.000001) {
+            layer.openPopup();
+          }
+        }
+      });
+    }
   </script>
 </body>
 </html>

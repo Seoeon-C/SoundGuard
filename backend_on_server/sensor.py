@@ -21,6 +21,7 @@ import asyncio
 import json
 import os
 import sys
+import time
 from pathlib import Path
 
 import numpy as np
@@ -105,13 +106,21 @@ async def run():
                         continue
 
                     print(f"\n[Sensor] 🎤 {CHUNK_SECONDS}초 녹음 중...")
+                    _t_rec_start = time.time()
                     audio = await loop.run_in_executor(None, record_audio)
+                    _t_rec_end = time.time()
 
                     sf.write(TEMP_DIR / "latest.wav", audio, SAMPLE_RATE)
 
                     audio_bytes = audio.astype(np.float32).tobytes()
+                    _t_send_start = time.time()
                     await ws.send(audio_bytes)
-                    print(f"[Sensor] 📤 오디오 전송 완료 ({len(audio_bytes):,} bytes)")
+                    _t_send_end = time.time()
+                    print(
+                        f"[Sensor] 📤 전송 완료 ({len(audio_bytes):,} bytes)"
+                        f" | 녹음={_t_rec_end-_t_rec_start:.2f}s"
+                        f" | 전송={_t_send_end-_t_send_start:.2f}s"
+                    )
 
         except websockets.ConnectionClosed:
             print("[Sensor] 서버 연결 끊김. 3초 후 재연결...")

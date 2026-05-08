@@ -35,6 +35,16 @@ const SOUND_LABEL_TEXT = {
   empty: "무음",
 }
 
+const looksLikeDeviceName = (name="") => {
+  const text = String(name || "").trim().toLowerCase()
+  const numbered = (prefix) => {
+    if (text === prefix) return true
+    if (!text.startsWith(prefix)) return false
+    return /^\d+$/.test(text.slice(prefix.length).trim().replace(/^[-_() ]+|[-_() ]+$/g, ""))
+  }
+  return text.startsWith("핸드폰 센서") || numbered("센서") || numbered("기계") || numbered("machine") || numbered("device")
+}
+
 const DEFAULT_MSGS = {
   w1: "무단 침입이 감지되었습니다. 즉시 퇴거하지 않을 시 관계기관에 신고 조치됩니다.",
   w2: "귀하의 위치 정보가 관계기관에 전송되었습니다. 즉시 이 구역을 이탈하십시오.",
@@ -107,7 +117,13 @@ function LoginScreen({ onLogin }) {
       <div style={{ width:"100%", maxWidth:390 }}>
         {/* 브랜드 */}
         <div style={{ textAlign:"center", marginBottom:28 }}>
-          <div style={{ width:70, height:70, borderRadius:18, background:"rgba(34,211,238,.09)", border:"1px solid rgba(34,211,238,.22)", display:"flex", alignItems:"center", justifyContent:"center", fontSize:30, margin:"0 auto 16px" }}>🔊</div>
+          <div style={{ width:90, height:90, display:"flex", alignItems:"center", justifyContent:"center", margin:"0 auto 16px" }}>
+            <img
+              src="/SoundGuardLogo_0.png"
+              alt="SoundGuard Logo"
+              style={{ width:"100%", height:"100%", objectFit:"contain" }}
+            />
+          </div>
           <div style={{ fontSize:9, letterSpacing:".2em", textTransform:"uppercase", color:C.t3, marginBottom:7 }}>Sound Guard System</div>
           <div style={{ fontSize:20, fontWeight:800, letterSpacing:"-.02em" }}>음향 기반 위험 예방·구조 시스템</div>
           <div style={{ fontSize:11, color:C.t2, marginTop:5 }}>상황실 관리자 전용</div>
@@ -294,6 +310,7 @@ function MentEditOverlay({ config, onUpdateConfig, onClose, wsRef }) {
 ════════════════════════════════════════════════════════════ */
 function MainScreen({ adminId, config, serverIP, onGoConfig, onLogout, onUpdateConfig }) {
   const [status,   setStatus]   = useState(0)
+  const [zoneStatusMap, setZoneStatusMap] = useState({})
   const [pausedZones, setPausedZones] = useState({})
   const [detected, setDetected] = useState(false)
   const [elapsed,  setElapsed]  = useState(0)
@@ -350,7 +367,7 @@ function MainScreen({ adminId, config, serverIP, onGoConfig, onLogout, onUpdateC
 
   const _zoneKey = selectedZoneId || "default"
   const paused = !!pausedZones[_zoneKey]
-  const logs   = logsByZone[_zoneKey] || []
+  const logs = logsByZone[_zoneKey] || []
 
   pausedRef.current = paused
 
@@ -386,6 +403,13 @@ function MainScreen({ adminId, config, serverIP, onGoConfig, onLogout, onUpdateC
       onUpdateConfig({ ...configRef.current, zone: firstZone.name })
       setMapCoord(firstZone.coord || "37.5665° N, 126.9780° E")
       setMapAddr(firstZone.label || "")
+      if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+        wsRef.current.send(JSON.stringify({
+          type: "zone_select",
+          zone_id: firstZone.id,
+          zone_name: firstZone.name,
+        }))
+      }
     }
   }, [selectedZoneId, zones])
 
@@ -493,6 +517,13 @@ function MainScreen({ adminId, config, serverIP, onGoConfig, onLogout, onUpdateC
     }
   }, [status])
 
+  useEffect(() => {
+    if (status !== 0) {
+      setCctvLatchedActive(true)
+      setCctvAlertStatus(status)
+    }
+  }, [status])
+
   /* 새 창이 닫혔는지 0.5초마다 확인 */
   useEffect(() => {
     if (!cctvPopupOpen) return
@@ -563,7 +594,9 @@ function MainScreen({ adminId, config, serverIP, onGoConfig, onLogout, onUpdateC
 
   const pushOtherZoneNotification = useCallback((payload) => {
     const zoneId = payload.zone_id || payload.zoneId
-    const zoneName = payload.zone_name || payload.zoneName || "다른 구역"
+    const incomingZoneName = payload.zone_name || payload.zoneName || ""
+    const matchedZone = zonesRef.current.find(z => z.id === zoneId)
+    const zoneName = matchedZone?.name || (!looksLikeDeviceName(incomingZoneName) && incomingZoneName) || "관리구역 미지정"
 
     if (!zoneId || zoneId === selectedZoneIdRef.current) return
 
@@ -579,8 +612,8 @@ function MainScreen({ adminId, config, serverIP, onGoConfig, onLogout, onUpdateC
       id: Date.now() + Math.random(),
       zoneId,
       zoneName,
-      coord: payload.coord || payload.map_coord || "37.5665° N, 126.9780° E",
-      addr: payload.addr || payload.address || zoneName,
+      coord: matchedZone?.coord || payload.coord || payload.map_coord || "37.5665° N, 126.9780° E",
+      addr: matchedZone?.addr || payload.addr || payload.address || zoneName,
       kind,
       type,
       title: kind === "emergency" ? "응급상황" : "무단침입",
@@ -648,6 +681,14 @@ function MainScreen({ adminId, config, serverIP, onGoConfig, onLogout, onUpdateC
           addLog("sys", data.paused ? "감지 일시정지 적용" : "감지 재개 적용", "백엔드 반영 완료")
           return
         }
+        if (data.type === "zones_updated") {
+          fetch(`${API_BASE}/api/zones`)
+            .then(r => r.json())
+            .then(updated => setZones(updated))
+            .catch(() => {})
+          return
+        }
+
         if (data.type === "self_check_result") {
           setSelfCheckRunning(false)
           setSelfCheckResult(data.items || [])
@@ -657,32 +698,41 @@ function MainScreen({ adminId, config, serverIP, onGoConfig, onLogout, onUpdateC
         if (data.type && data.type !== "analysis") return
 
         const situation = Number(data.situation ?? 0)
-        setStatus(situation)
-        setBeatsTs(data.timestamp || nowStr())
-        const fallbackBeats = {
-          background:   situation === 0 ? 90 : 5,
-          speech:       0,
-          footsteps:    0,
-          interaction:  0,
-          impact_noise: situation === 2 ? 80 : 0,
-          emergency:    0,
+
+        // 구역별 상태 지도 업데이트 (다중 포인트 지도용)
+        const incomingZoneId = data.zone_id || data.zoneId || selectedZoneIdRef.current
+        if (incomingZoneId) {
+          setZoneStatusMap(prev => ({ ...prev, [incomingZoneId]: situation }))
         }
-        const nextBeats = data.beats || fallbackBeats
-        const emergencyActive = Boolean(
-          data.emergency_voice_confirmed ||
-          (situation === 2 && data.decision_source === "gpt")
-        )
-        setBeats({
-          ...fallbackBeats,
-          ...nextBeats,
-          emergency: Number(nextBeats.emergency ?? (emergencyActive ? 100 : 0)),
-        })
+
+        if (true) {
+          setStatus(situation)
+          setBeatsTs(data.timestamp || nowStr())
+          const fallbackBeats = {
+            background:   situation === 0 ? 90 : 5,
+            speech:       0,
+            footsteps:    0,
+            interaction:  0,
+            impact_noise: situation === 2 ? 80 : 0,
+            emergency:    0,
+          }
+          const nextBeats = data.beats || fallbackBeats
+          const emergencyActive = Boolean(
+            data.emergency_voice_confirmed ||
+            (situation === 2 && data.decision_source === "gpt")
+          )
+          setBeats({
+            ...fallbackBeats,
+            ...nextBeats,
+            emergency: Number(nextBeats.emergency ?? (emergencyActive ? 100 : 0)),
+          })
+          const rawSoundLabel = data.stt_text?.trim() ? "speech" : (data.beats_raw_label || data.beats_label || "—")
+          setLastSnd(SOUND_LABEL_TEXT[rawSoundLabel] || rawSoundLabel)
+        }
 
         const activeZone = zonesRef.current.find(z => z.id === selectedZoneIdRef.current)
         const activeZoneCoord = activeZone?.coord || mapCoordRef.current
         const activeZoneAddr = activeZone?.addr || mapAddrRef.current
-        const rawSoundLabel = data.stt_text?.trim() ? "speech" : (data.beats_raw_label || data.beats_label || "—")
-        setLastSnd(SOUND_LABEL_TEXT[rawSoundLabel] || rawSoundLabel)
 
         let eventTitle = data.situation_name || "분석 결과"
         let noticeKind = null
@@ -708,6 +758,7 @@ function MainScreen({ adminId, config, serverIP, onGoConfig, onLogout, onUpdateC
           noticeType = 2
         }
 
+        // 서버 채널 분리로 받은 이벤트는 현재 구역 것 → zone_id 없이 addLog
         addLog(
           situation === 2 ? 2 : situation === 1 ? 1 : "n",
           eventTitle,
@@ -720,20 +771,12 @@ function MainScreen({ adminId, config, serverIP, onGoConfig, onLogout, onUpdateC
           addLog("voice", "음성 인식 결과", `"${data.stt_text.trim()}"`)
         }
 
-        const currentMonitoringZoneId = selectedZoneIdRef.current
-        const incomingZoneId = data.zone_id || data.zoneId || null
-        const incomingZoneName = data.zone_name || data.zoneName || "관리구역 미지정"
-
-        const isOtherZoneAlert =
-          Boolean(incomingZoneId) &&
-          incomingZoneId !== "default" &&
-          incomingZoneId !== currentMonitoringZoneId
-
-        if (noticeKind && isOtherZoneAlert) {
+        // 다른 구역 알림은 서버가 zone_alert 타입으로 별도 전송하므로 제거
+        if (false && noticeKind) {
           setNotifications(prev => [{
             id: Date.now() + Math.random(),
-            zoneId: incomingZoneId,
-            zoneName: incomingZoneName,
+            zoneId: data.zone_id,
+            zoneName: data.zone_name || "관리구역 미지정",
             coord: data.coord || activeZoneCoord,
             addr: data.addr || activeZoneAddr,
             kind: noticeKind,
@@ -766,7 +809,7 @@ function MainScreen({ adminId, config, serverIP, onGoConfig, onLogout, onUpdateC
         const msg = data.tts_message || ""
         if (msg && type) {
           setCurMsg({ text: msg, type })
-          addLog(type === "응급 안내 방송" ? "emg" : "warn", `${type} 송출`, msg)
+          addLog(type === "응급 안내 방송" ? "emg" : "warn", `${type} 송출`, msg, data.zone_id)
         } else {
           setCurMsg(null)
         }
@@ -1071,11 +1114,18 @@ function MainScreen({ adminId, config, serverIP, onGoConfig, onLogout, onUpdateC
   const selectedZone = zones.find(z => z.id === selectedZoneId)
   const currentZoneName = selectedZone?.name || config.zone || "관리구역 미지정"
   const mapSrc =
-    `/map.html?lat=${encodeURIComponent(lat)}` +
-    `&lon=${encodeURIComponent(lon)}` +
-    `&name=${encodeURIComponent(currentZoneName)}` +
-    `&addr=${encodeURIComponent(mapAddr || "관할 구역 주소 미상")}` +
-    `&status=${status === 2 ? "danger" : status === 1 ? "warning" : "normal"}` +
+    `/map.html?zones=${encodeURIComponent(
+      JSON.stringify(
+        zones.map(z => ({
+          id: z.id,
+          name: z.name,
+          coord: z.coord,
+          addr: z.addr || z.label || "",
+          status: zoneStatusMap[z.id] ?? 0,
+          selected: z.id === selectedZoneId,
+        }))
+      )
+    )}` +
     `&key=${encodeURIComponent(VWORLD_KEY || "")}`
 
   const hdrSt = { display:"flex", alignItems:"center", gap:8, padding:"9px 16px", borderBottom:`1px solid ${C.bd}`, background:"rgba(7,14,28,.96)", flexShrink:0, flexWrap:"wrap", rowGap:6 }
@@ -1104,7 +1154,14 @@ function MainScreen({ adminId, config, serverIP, onGoConfig, onLogout, onUpdateC
       {/* ── 헤더 ── */}
       <div style={hdrSt}>
         <div style={{ display:"flex", alignItems:"center", gap:8 }}>
-          <div style={{ fontSize:14, fontWeight:800, whiteSpace:"nowrap" }}>🔊 SoundGuard</div>
+          <div style={{ display:"flex", alignItems:"center", gap:6, fontSize:14, fontWeight:800, whiteSpace:"nowrap" }}>
+            <img
+              src="/SoundGuardLogo.png"
+              alt="SoundGuard Logo"
+              style={{ width:34, height:34, objectFit:"contain" }}
+            />
+            SoundGuard
+          </div>
           <div style={{ fontSize:10, color:C.t2, padding:"3px 10px", background:"rgba(255,255,255,.04)", border:`1px solid ${C.bd}`, borderRadius:20, maxWidth:200, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>
             {config.zone || "관리구역 미지정"}
           </div>
@@ -1159,13 +1216,17 @@ function MainScreen({ adminId, config, serverIP, onGoConfig, onLogout, onUpdateC
           <div style={{ ...cardSt, flexShrink:0 }}>
             <div style={mcHeadSt}><span style={mctSt}>📍 구역 정보</span></div>
             <div style={{ display:"flex", flexDirection:"column" }}>
-              {[["구역명", currentZoneName||"—"], ["감지 장치", "마이크 #1"], ["모니터링 시작", startTime.current]].map(([l,v])=>(
+              {[
+                ["구역명", currentZoneName||"—", () => setZoneModal(true)],
+                ["감지 장치", "마이크 #1", null],
+                ["모니터링 시작", startTime.current, null],
+              ].map(([l, v, handler]) => (
                 <div
                   key={l}
-                  style={{ padding:"10px 12px", borderBottom:`1px solid ${C.bd}`, cursor: l==="구역명" ? "pointer" : "default", transition:"background-color 0.2s" }}
-                  onMouseOver={e => { if(l==="구역명") { e.currentTarget.style.backgroundColor="rgba(34,211,238,.15)"; e.currentTarget.children[1].style.color=C.cyan } }}
-                  onMouseOut={e => { if(l==="구역명") { e.currentTarget.style.backgroundColor="transparent"; e.currentTarget.children[1].style.color=C.t1 } }}
-                  onClick={() => { if(l==="구역명") setZoneModal(true) }}
+                  style={{ padding:"10px 12px", borderBottom:`1px solid ${C.bd}`, cursor: handler ? "pointer" : "default", transition:"background-color 0.2s" }}
+                  onMouseOver={e => { if(handler) { e.currentTarget.style.backgroundColor="rgba(34,211,238,.15)"; e.currentTarget.children[1].style.color=C.cyan } }}
+                  onMouseOut={e => { if(handler) { e.currentTarget.style.backgroundColor="transparent"; e.currentTarget.children[1].style.color=C.t1 } }}
+                  onClick={() => handler && handler()}
                 >
                   <div style={{ fontSize:8, textTransform:"uppercase", letterSpacing:".12em", color:C.t3, marginBottom:4, fontWeight:700 }}>{l}</div>
                   <div style={{ fontSize:12, fontWeight:700, transition:"color 0.2s" }}>{v}</div>

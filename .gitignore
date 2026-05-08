@@ -53,15 +53,30 @@ Thumbs.db
 .idea/
 *.swp
 
-# --- Flutter (만약 Flutter를 같이 쓰신다면) ---
+# --- Flutter / sensor_app ---
 .dart_tool/
 .packages
 .pub-cache/
 .pub/
-android/**/generated/
-android/app/src/main/res/values/strings.xml
-ios/Flutter/Generated.xcconfig
-ios/Flutter/flutter_export_environment.sh
+
+# sensor_app 빌드 산출물
+sensor_app/build/
+sensor_app/.flutter-plugins
+sensor_app/.flutter-plugins-dependencies
+
+# Android 로컬 환경
+sensor_app/android/.gradle/
+sensor_app/android/local.properties
+sensor_app/android/key.properties
+
+# iOS CocoaPods
+sensor_app/ios/Pods/
+sensor_app/ios/.symlinks/
+sensor_app/ios/Flutter/Generated.xcconfig
+sensor_app/ios/Flutter/flutter_export_environment.sh
+
+# macOS
+sensor_app/macos/Flutter/GeneratedPluginRegistrant.swift
 
 #backend
 backend/.env

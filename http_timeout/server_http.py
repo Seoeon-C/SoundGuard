@@ -600,14 +600,7 @@ async def sensor_endpoint(websocket: WebSocket):
                 chunk = latest_chunk
                 latest_chunk = None
                 try:
-                    decision = await _process_audio(chunk, sample_rate, zone_info, zone_state, tmp_path)
-                    # TTS 결과를 센서 앱으로 전송
-                    if decision and decision.tts_key not in ("NONE", None, ""):
-                        tts_url = f"{SERVER_PUBLIC_URL}/tts/{decision.tts_key}.mp3"
-                        try:
-                            await websocket.send_json({"type": "tts", "announcement_url": tts_url})
-                        except Exception:
-                            pass
+                    await _process_audio(chunk, sample_rate, zone_info, zone_state, tmp_path)
                 except Exception as exc:
                     print(f"[Sensor] 처리 오류: {exc}")
             is_processing = False
@@ -657,16 +650,7 @@ async def _process_audio(
     now       = time.time()
 
     # bytes → numpy
-    # WAV 헤더 포함 여부 감지 (Flutter는 WAV 파일 전체 전송, sensor.py는 raw float32)
-    if audio_bytes[:4] == b"RIFF":
-        import io as _io
-        data, sample_rate = sf.read(_io.BytesIO(audio_bytes))
-        data = data.astype(np.float32)
-        if data.ndim > 1:
-            data = data.mean(axis=1)
-        audio = data
-    else:
-        audio = np.frombuffer(audio_bytes, dtype=np.float32)
+    audio = np.frombuffer(audio_bytes, dtype=np.float32)
 
     # 임시 wav 저장 (STT용)
     sf.write(tmp_path, audio, sample_rate)
