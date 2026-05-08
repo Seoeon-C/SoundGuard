@@ -374,6 +374,8 @@ function MainScreen({ adminId, config, serverIP, onGoConfig, onLogout, onUpdateC
   const reconnectRef = useRef(null)
   const geocodeCacheRef = useRef({})
   const mapPanelRef = useRef(null)
+  const mapIframeRef = useRef(null)
+  const mapStatusRef = useRef({})
   const cctvWindowRef = useRef(null)
   const [cctvWidthPercent, setCctvWidthPercent] = useState(40)
   const [cctvPopupOpen, setCctvPopupOpen] = useState(false)
@@ -965,6 +967,16 @@ function MainScreen({ adminId, config, serverIP, onGoConfig, onLogout, onUpdateC
     sendZonesSync()
   }, [zones, sendZonesSync])
 
+  useEffect(() => {
+    const statuses = {}
+    zones.forEach(z => {
+      statuses[z.id] = z.id === selectedZoneId ? status : (zoneStatusMap[z.id] ?? 0)
+    })
+    if (zones.length === 0) statuses["default"] = status
+    mapStatusRef.current = statuses
+    mapIframeRef.current?.contentWindow?.postMessage({ type: "zone_status", statuses }, "*")
+  }, [status, zoneStatusMap, zones, selectedZoneId])
+
   const togglePause = () => {
     const zoneId = selectedZoneIdRef.current || "default"
     const next = !pausedRef.current
@@ -1257,7 +1269,7 @@ function MainScreen({ adminId, config, serverIP, onGoConfig, onLogout, onUpdateC
         name: z.name,
         coord: z.coord,
         addr: z.addr || z.label || "",
-        status: z.id === selectedZoneId ? status : (zoneStatusMap[z.id] ?? 0),
+        status: 0,
         selected: z.id === selectedZoneId,
       }))
     : [{
@@ -1265,7 +1277,7 @@ function MainScreen({ adminId, config, serverIP, onGoConfig, onLogout, onUpdateC
         name: currentZoneName,
         coord: mapCoord || `${lat}, ${lon}`,
         addr: mapAddr || "관할 구역 주소 미상",
-        status,
+        status: 0,
         selected: true,
       }]
   const mapPayloadZones = zonesForMap.map(z =>
@@ -1394,10 +1406,18 @@ function MainScreen({ adminId, config, serverIP, onGoConfig, onLogout, onUpdateC
 
         {/* 지도 배경 - 전체화면 */}
         <iframe
+          ref={mapIframeRef}
           key={mapSrc}
           title="SoundGuard Map"
           src={mapSrc}
           style={{ position:"absolute", inset:0, width:"100%", height:"100%", border:"none", display:"block" }}
+          onLoad={() => {
+            setTimeout(() => {
+              mapIframeRef.current?.contentWindow?.postMessage(
+                { type: "zone_status", statuses: mapStatusRef.current }, "*"
+              )
+            }, 400)
+          }}
         />
 
         {/* 좌측 플로팅 패널 */}

@@ -86,6 +86,12 @@ backend/assets/tts/
 backend/beats/Evaluation_Results/
 backend/reference/
 
+# --- 미디어 파일 (용량이 커서 제외) ---
+*.mp4
+*.mov
+*.avi
+*.mkv
+
 # --- frontend ---
 frontend/node_modules/
 frontend/.pnp
