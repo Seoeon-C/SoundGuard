@@ -98,11 +98,23 @@ const getInitialTheme = () => {
 /* ════════════════════════════════════════════════════════════
    메인 컴포넌트
 ════════════════════════════════════════════════════════════ */
+const THEME_STORAGE_KEY = "soundguard-theme"
+const getInitialTheme = () => {
+  if (typeof window === "undefined") return "dark"
+  return window.localStorage.getItem(THEME_STORAGE_KEY) || "dark"
+}
+
 export default function SoundGuardDashboard() {
   const [screen, setScreen] = useState("login")  // "login" | "config" | "main"
   const [adminId, setAdminId] = useState("")
   const [config, setConfig] = useState({ zone:"", w1:"", w2:"", emg:"" })
   const [theme, setTheme] = useState(getInitialTheme)
+  const toggleTheme = useCallback(() => setTheme(prev => prev === "light" ? "dark" : "light"), [])
+  useEffect(() => {
+    document.body.classList.toggle("sg-theme-light", theme === "light")
+    document.body.classList.toggle("sg-theme-dark", theme !== "light")
+    window.localStorage.setItem(THEME_STORAGE_KEY, theme)
+  }, [theme])
   // ─── 백엔드 연결 설정 ──────────────────────────────────────────
   // [Vite 로컬 개발] server.py를 본인 PC에서 실행 후 아래 줄 사용
   // const SERVER_IP = "localhost:8000"
@@ -368,6 +380,13 @@ function MainScreen({ adminId, config, serverIP, onGoConfig, onLogout, onUpdateC
   })
   const [logsByZone, setLogsByZone] = useState({})
   const [clock,    setClock]    = useState(nowStr())
+  const [decisionMeta, setDecisionMeta] = useState({
+    situationName:"대기", source:"대기", reason:"서버 분석 결과를 기다리는 중입니다",
+    action:"감시 대기", beatsLabel:"—", beatsRawLabel:"—",
+    sttText:"", ttsKey:"NONE", emergencyConfirmed:false, timestamp:"대기",
+  })
+  const [sidebarExpanded, setSidebarExpanded] = useState({ status:false, health:false, zone:false, detection:false, logs:false })
+  const toggleSidebarSection = useCallback((key) => setSidebarExpanded(prev => ({...prev, [key]:!prev[key]})), [])
   const wsRef = useRef(null)
   const reconnectRef = useRef(null)
   const geocodeCacheRef = useRef({})
@@ -1285,9 +1304,9 @@ function MainScreen({ adminId, config, serverIP, onGoConfig, onLogout, onUpdateC
   
 
   const mapPanelSt = {
-    flex:1, display:"grid",
-    gridTemplateColumns: "1fr",
-    position:"relative", background:C.mapBg, minHeight:0,
+    ...cardSt, flex:1, display:"grid",
+    gridTemplateColumns:"1fr",
+    position:"relative", background:"#0a1424", minHeight:0,
   }
   const mapAreaSt = { position:"relative", minWidth:0, minHeight:0, overflow:"hidden" }
   const resizeHandleSt = {
@@ -1296,60 +1315,31 @@ function MainScreen({ adminId, config, serverIP, onGoConfig, onLogout, onUpdateC
     borderLeft:`1px solid ${C.bd}`, borderRight:`1px solid ${C.bd}`,
     display:"flex", alignItems:"center", justifyContent:"center", touchAction:"none",
   }
-  const resizeGripSt = { width:2, height:44, borderRadius:C.rXs, background:C.t2, boxShadow:`0 0 12px ${C.cyanBorder}` }
-  const cctvAreaSt = { position:"relative", minWidth:0, minHeight:0, overflow:"hidden", background:C.videoBg }
+  const resizeGripSt = { width:2, height:44, borderRadius:2, background:"rgba(222,234,255,.45)", boxShadow:"0 0 12px rgba(34,211,238,.35)" }
+  const cctvAreaSt = { position:"relative", minWidth:0, minHeight:0, overflow:"hidden", background:"#020711" }
   const bottomLayoutSt = cctvVisible
-    ? { display:"grid", gridTemplateColumns:"minmax(540px,1fr) minmax(360px,36%)", gap:10, minHeight:300, maxHeight:"42%", flexShrink:0, minWidth:0 }
-    : { display:"grid", gridTemplateColumns:"1fr", gap:10, flexShrink:0, minHeight:230, minWidth:0 }
+    ? { display:"grid", gridTemplateColumns:"minmax(540px,1fr) minmax(360px,36%)", gap:10, minHeight:280, maxHeight:"42%", flexShrink:0, minWidth:0 }
+    : { display:"grid", gridTemplateColumns:"1fr", gap:10, flexShrink:0, minHeight:200, minWidth:0 }
   const bottomLeftLayoutSt = {
     display:"grid",
-    gridTemplateColumns:cctvVisible ? "minmax(230px,.85fr) minmax(280px,1fr)" : "minmax(300px,.85fr) minmax(420px,1.35fr)",
-    gap:10,
-    minWidth:0,
-    minHeight:0,
+    gridTemplateColumns: cctvVisible ? "minmax(230px,.85fr) minmax(280px,1fr)" : "minmax(300px,.85fr) minmax(420px,1.35fr)",
+    gap:10, minWidth:0, minHeight:0,
   }
-  const bottomInsightStackSt = { display:"flex", flexDirection:"column", gap:10, minWidth:0, minHeight:0 }
   const cctvBottomAreaSt = { ...cctvAreaSt, minHeight:260, height:"100%" }
+
   const soundItems = [
-    { key:"background", label:"배경음", value:Number(beats.background || 0), color:C.green },
-    { key:"speech", label:"사람 목소리", value:Number(beats.speech || 0), color:C.cyan },
-    { key:"footsteps", label:"발소리", value:Number(beats.footsteps || 0), color:C.amber },
-    { key:"interaction", label:"문소리", value:Number(beats.interaction || 0), color:C.violet },
-    { key:"impact_noise", label:"충격음", value:Number(beats.impact_noise || 0), color:C.red },
-    { key:"emergency", label:"응급음", value:Number(beats.emergency || 0), color:C.red },
+    { key:"background",  label:"배경음",     value:Number(beats.background  || 0), color:C.green  },
+    { key:"speech",      label:"사람 목소리", value:Number(beats.speech      || 0), color:C.cyan   },
+    { key:"footsteps",   label:"발소리",      value:Number(beats.footsteps   || 0), color:C.amber  },
+    { key:"interaction", label:"문소리",      value:Number(beats.interaction || 0), color:C.violet },
+    { key:"impact_noise",label:"충격음",      value:Number(beats.impact_noise|| 0), color:C.red    },
+    { key:"emergency",   label:"응급음",      value:Number(beats.emergency   || 0), color:C.red    },
   ]
   const dominantSound = soundItems.reduce((best, item) => item.value > best.value ? item : best, soundItems[0])
   const dominantSoundValue = Math.round(Math.max(0, Math.min(100, Number(dominantSound.value) || 0)))
-  const decisionBadgeText =
-    status === 2 ? "위험 감지" :
-    status === 1 ? "무단침입 후보" :
-    "정상 관제"
+  const decisionBadgeText = status === 2 ? "위험 감지" : status === 1 ? "무단침입 후보" : "정상 관제"
   const sttDisplay = decisionMeta.sttText?.trim() || "없음"
-  const responseStateText =
-    curMsg ? curMsg.type :
-    status === 2 ? "위험 상황 확인 중" :
-    status === 1 ? "경고 조건 확인 중" :
-    "송출 대기"
-  const sidebarStatusMetrics = [
-    ["STATUS", sd.name, sd.c],
-    ["ELAPSED", status !== 0 ? fmt(elapsed) : "00:00", status !== 0 ? sd.c : C.t2],
-    ["LAST SOUND", lastSnd, C.cyan],
-    ["MODE", paused ? "PAUSED" : "AUTO", paused ? C.amber : C.green],
-  ]
-  const sidebarHealthItems = [
-    ["AI", "ONLINE", C.green],
-    ["MIC", paused ? "HOLD" : "READY", paused ? C.amber : C.green],
-    ["STT", "READY", C.cyan],
-    ["CCTV", cctvVisible ? "ACTIVE" : "STBY", cctvVisible ? C.amber : C.t2],
-  ]
-  const visibleHealthItems = sidebarExpanded.health ? sidebarHealthItems : sidebarHealthItems.slice(0, 2)
-  const zoneInfoRows = [
-    ["구역명", currentZoneName || "—", () => setZoneModal(true)],
-    ["감지 장치", "마이크 #1", null],
-    ["모니터링 시작", startTime.current, null],
-  ]
-  const visibleZoneInfoRows = sidebarExpanded.zone ? zoneInfoRows : zoneInfoRows.slice(0, 1)
-  const visibleLogs = sidebarExpanded.logs ? logs : logs.slice(0, 2)
+  const responseStateText = curMsg ? curMsg.type : status === 2 ? "위험 상황 확인 중" : status === 1 ? "경고 조건 확인 중" : "송출 대기"
 
   return (
     <div style={{ display:"flex", flexDirection:"column", height:"100vh", overflow:"hidden", position:"relative" }}>
@@ -1383,13 +1373,9 @@ function MainScreen({ adminId, config, serverIP, onGoConfig, onLogout, onUpdateC
               </span>
             )}
           </button>
-          <button className="sg-mini-button" onClick={() => setSettingsModal(true)}>⚙ 설정</button>
-          <button
-            className="sg-mini-button sg-theme-toggle"
-            onClick={onToggleTheme}
-            title="화면 테마 전환"
-          >
-            {theme === "light" ? "다크 모드" : "라이트 모드"}
+          <button style={{ ...mBtnSt }} onClick={() => setSettingsModal(true)}>⚙ 설정</button>
+          <button style={{ ...mBtnSt, minWidth:82 }} onClick={onToggleTheme} title="화면 테마 전환">
+            {theme === "light" ? "🌙 다크 모드" : "☀ 라이트 모드"}
           </button>
         </div>
       </div>
@@ -1605,48 +1591,15 @@ function MainScreen({ adminId, config, serverIP, onGoConfig, onLogout, onUpdateC
             </div>
 
             {/* 리사이즈 핸들 */}
-            {false && cctvVisible && (
-              <div
-                role="separator"
-                aria-label="지도와 CCTV 화면 크기 조절"
-                title="드래그해서 화면 크기 조절"
-                onPointerDown={startCctvResize}
-                style={resizeHandleSt}
-              >
-                <div style={resizeGripSt} />
-              </div>
-            )}
-
-            {/* CCTV 영역 */}
-            {false && cctvVisible && (
-              <div style={cctvAreaSt}>
-                <video
-                  src={cctvVideoSrc}
-                  autoPlay muted loop playsInline
-                  style={{ width:"100%", height:"100%", objectFit:"cover", display:"block" }}
-                />
-                <div style={{ position:"absolute", top:12, left:12, display:"flex", alignItems:"center", gap:7, background:C.overlay, border:`1px solid ${cctvStatus === 2 ? C.redBorder : C.amberBorder}`, borderRadius:C.rMd, padding:"5px 9px", fontSize:fs(11), fontWeight:800, color:cctvStatus === 2 ? C.red : C.amber }}>
-                  <span style={{ width:7, height:7, borderRadius:C.rPill, background:cctvStatus === 2 ? C.red : C.amber, boxShadow:`0 0 12px ${cctvStatus === 2 ? C.red : C.amber}` }} />
-                  CCTV
-                </div>
-                <button type="button" onClick={openCctvPopup}
-                  style={{ position:"absolute", top:12, right:62, background:C.overlay, border:`1px solid ${C.bd}`, borderRadius:C.rMd, padding:"5px 9px", color:C.t1, cursor:"pointer", fontSize:fs(10), fontWeight:800, fontFamily:"inherit" }}>
-                  팝업으로 보기
-                </button>
-                <button type="button" onClick={closeCctvView}
-                  style={{ position:"absolute", top:12, right:12, background:C.redSoft, border:`1px solid ${C.redBorder}`, borderRadius:C.rMd, padding:"5px 9px", color:C.red, cursor:"pointer", fontSize:fs(10), fontWeight:900, fontFamily:"inherit" }}
-                  title="CCTV 분할 화면 닫기">
-                  닫기
-                </button>
-                <div style={{ position:"absolute", right:12, bottom:12, background:C.overlay, border:`1px solid ${C.bd}`, borderRadius:C.rMd, padding:"5px 9px", fontSize:fs(10), color:C.t2 }}>
-                  {cctvStatus === 2 ? "위험 감지 화면" : "무단침입 감지 화면"}
-                </div>
-              </div>
-            )}
+            {/* CCTV 하단으로 이동 - 지도 옆 CCTV 비활성화 */}
+            {false && cctvVisible && (<div style={resizeHandleSt}><div style={resizeGripSt} /></div>)}
+            {false && cctvVisible && (<div style={cctvAreaSt} />)}
           </div>
 
+          {/* 하단 3패널: 음향분석 | 판단결과+메시지 | CCTV */}
           <div style={bottomLayoutSt}>
             <div style={bottomLeftLayoutSt}>
+
               {/* 실시간 음향 분석 */}
               <div className="sg-card sg-bottom-panel">
                 <div className="sg-panel-head">
@@ -1660,24 +1613,16 @@ function MainScreen({ adminId, config, serverIP, onGoConfig, onLogout, onUpdateC
                       {dominantSoundValue > 0 ? dominantSound.label : "대기"}
                     </div>
                   </div>
-                  <div className="sg-sound-dominant-value" style={{ color:dominantSound.color }}>
-                    {dominantSoundValue}%
-                  </div>
+                  <div className="sg-sound-dominant-value" style={{ color:dominantSound.color }}>{dominantSoundValue}%</div>
                 </div>
                 <div className="sg-sound-list">
                   {soundItems.map(item => {
                     const pct = Math.round(Math.max(0, Math.min(100, Number(item.value) || 0)))
                     const active = item.key === dominantSound.key && pct > 0
                     return (
-                      <div
-                        className={`sg-sound-row ${active ? "sg-sound-row--active" : ""}`}
-                        key={item.key}
-                        style={{ "--sound-color": item.color }}
-                      >
+                      <div className={`sg-sound-row${active ? " sg-sound-row--active" : ""}`} key={item.key} style={{"--sound-color":item.color}}>
                         <div className="sg-sound-label">{item.label}</div>
-                        <div className="sg-sound-track">
-                          <div className="sg-sound-fill" style={{ width:`${pct}%` }} />
-                        </div>
+                        <div className="sg-sound-track"><div className="sg-sound-fill" style={{ width:`${pct}%` }} /></div>
                         <div className="sg-sound-value">{pct}%</div>
                       </div>
                     )
@@ -1685,75 +1630,50 @@ function MainScreen({ adminId, config, serverIP, onGoConfig, onLogout, onUpdateC
                 </div>
               </div>
 
-              <div style={bottomInsightStackSt}>
-                {/* 판단 근거 */}
+              <div style={{ display:"flex", flexDirection:"column", gap:10, minWidth:0, minHeight:0 }}>
+                {/* 감지 판단 요약 */}
                 <div className="sg-card sg-bottom-panel sg-decision-panel">
                   <div className="sg-panel-head">
                     <span className="sg-panel-title">감지 판단 요약</span>
-                    <span className="sg-status-pill" style={{ color:sd.c, borderColor:sd.bd, background:sd.bg }}>
-                      {decisionBadgeText}
-                    </span>
+                    <span className="sg-status-pill" style={{ color:STATUS_DATA[status]?.c, borderColor:STATUS_DATA[status]?.bd, background:STATUS_DATA[status]?.bg }}>{decisionBadgeText}</span>
                   </div>
                   <div className="sg-decision-body">
-                    <div className="sg-decision-title" style={{ color:sd.c }}>{decisionMeta.situationName || sd.name}</div>
-                    <div className="sg-decision-reason">
-                      {decisionMeta.reason || "현재 분석 근거가 아직 수신되지 않았습니다"}
-                    </div>
+                    <div className="sg-decision-title" style={{ color:STATUS_DATA[status]?.c }}>{decisionMeta.situationName}</div>
+                    <div className="sg-decision-reason">{decisionMeta.reason || "현재 분석 근거가 아직 수신되지 않았습니다"}</div>
                     <div className="sg-evidence-grid">
-                      {[
-                        ["BEATs", decisionMeta.beatsRawLabel || decisionMeta.beatsLabel || "—"],
-                        ["STT", sttDisplay],
-                        ["대응", decisionMeta.action || "감시 지속"],
-                      ].map(([label, value]) => (
-                        <div className="sg-evidence-item" key={label}>
-                          <span>{label}</span>
-                          <strong>{value}</strong>
-                        </div>
+                      {[["BEATs", decisionMeta.beatsRawLabel || decisionMeta.beatsLabel || "—"], ["STT", sttDisplay], ["대응", decisionMeta.action || "감시 지속"]].map(([label, value]) => (
+                        <div className="sg-evidence-item" key={label}><span>{label}</span><strong>{value}</strong></div>
                       ))}
                     </div>
                   </div>
                 </div>
 
-                {/* 현재 메시지 */}
+                {/* 현재 대응 메시지 */}
                 <div className="sg-card sg-bottom-panel sg-response-panel">
                   <div className="sg-panel-head">
                     <span className="sg-panel-title">📢 현재 대응 메시지</span>
                     <span className="sg-bottom-head-value">{decisionMeta.ttsKey || "NONE"}</span>
                   </div>
                   <div className="sg-response-body">
-                    <div className="sg-response-state" style={{ color:curMsg ? C.cyan : C.t2 }}>
-                      {responseStateText}
-                    </div>
-                    <div className={`sg-response-message ${curMsg ? "" : "sg-response-message--empty"}`}>
+                    <div className="sg-response-state" style={{ color:curMsg ? C.cyan : C.t2 }}>{responseStateText}</div>
+                    <div className={`sg-response-message${curMsg ? "" : " sg-response-message--empty"}`}>
                       {curMsg ? curMsg.text : "현재 송출 중인 메시지 없음"}
                     </div>
                   </div>
                 </div>
               </div>
             </div>
+
+            {/* CCTV 하단 우측 */}
             {cctvVisible && (
               <div className="sg-card" style={cctvBottomAreaSt}>
-                <video
-                  src={cctvVideoSrc}
-                  autoPlay muted loop playsInline
-                  style={{ width:"100%", height:"100%", objectFit:"cover", display:"block" }}
-                />
-                <div style={{ position:"absolute", top:12, left:12, display:"flex", alignItems:"center", gap:7, background:C.overlay, border:`1px solid ${cctvStatus === 2 ? C.redBorder : C.amberBorder}`, borderRadius:C.rMd, padding:"5px 9px", fontSize:fs(11), fontWeight:800, color:cctvStatus === 2 ? C.red : C.amber }}>
-                  <span style={{ width:7, height:7, borderRadius:C.rPill, background:cctvStatus === 2 ? C.red : C.amber, boxShadow:`0 0 12px ${cctvStatus === 2 ? C.red : C.amber}` }} />
-                  CCTV
+                <video src={cctvVideoSrc} autoPlay muted loop playsInline style={{ width:"100%", height:"100%", objectFit:"cover", display:"block" }} />
+                <div style={{ position:"absolute", top:12, left:12, display:"flex", alignItems:"center", gap:7, background:"rgba(2,7,17,.82)", border:`1px solid ${cctvStatus===2?"rgba(248,113,113,.5)":"rgba(251,191,36,.45)"}`, borderRadius:6, padding:"5px 9px", fontSize:11, fontWeight:800, color:cctvStatus===2?C.red:C.amber }}>
+                  <span style={{ width:7, height:7, borderRadius:"50%", background:cctvStatus===2?C.red:C.amber, boxShadow:`0 0 12px ${cctvStatus===2?C.red:C.amber}` }} />CCTV
                 </div>
-                <button type="button" onClick={openCctvPopup}
-                  style={{ position:"absolute", top:12, right:62, background:C.overlay, border:`1px solid ${C.bd}`, borderRadius:C.rMd, padding:"5px 9px", color:C.t1, cursor:"pointer", fontSize:fs(10), fontWeight:800, fontFamily:"inherit" }}>
-                  팝업으로 보기
-                </button>
-                <button type="button" onClick={closeCctvView}
-                  style={{ position:"absolute", top:12, right:12, background:C.redSoft, border:`1px solid ${C.redBorder}`, borderRadius:C.rMd, padding:"5px 9px", color:C.red, cursor:"pointer", fontSize:fs(10), fontWeight:900, fontFamily:"inherit" }}
-                  title="CCTV 화면 닫기">
-                  닫기
-                </button>
-                <div style={{ position:"absolute", right:12, bottom:12, background:C.overlay, border:`1px solid ${C.bd}`, borderRadius:C.rMd, padding:"5px 9px", fontSize:fs(10), color:C.t2 }}>
-                  {cctvStatus === 2 ? "위험 감지 화면" : "무단침입 감지 화면"}
-                </div>
+                <button type="button" onClick={openCctvPopup} style={{ position:"absolute", top:12, right:62, background:"rgba(2,7,17,.86)", border:`1px solid ${C.bd}`, borderRadius:6, padding:"5px 9px", color:C.t1, cursor:"pointer", fontSize:10, fontWeight:800, fontFamily:"inherit" }}>팝업으로 보기</button>
+                <button type="button" onClick={closeCctvView} style={{ position:"absolute", top:12, right:12, background:"rgba(248,113,113,.12)", border:"1px solid rgba(248,113,113,.35)", borderRadius:6, padding:"5px 9px", color:C.red, cursor:"pointer", fontSize:10, fontWeight:900, fontFamily:"inherit" }} title="CCTV 화면 닫기">닫기</button>
+                <div style={{ position:"absolute", right:12, bottom:12, background:"rgba(2,7,17,.82)", border:`1px solid ${C.bd}`, borderRadius:6, padding:"5px 9px", fontSize:10, color:C.t2 }}>{cctvStatus===2?"위험 감지 화면":"무단침입 감지 화면"}</div>
               </div>
             )}
           </div>
