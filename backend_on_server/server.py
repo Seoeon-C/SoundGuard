@@ -39,7 +39,8 @@ from environmental_sound import BeatsEnvironmentClassifier, SoundEvent
 from stt import WhisperAPI
 from decision import GPTDecisionEngine, DecisionResult
 from output import EventLoggerAndMessenger
-from db import Zone, get_db, init_db, ZONE_LABELS
+from db import Zone, AudioSample, get_db, init_db, ZONE_LABELS, SessionLocal
+from supabase_audio import upload_audio_file
 from tts_to_mp3.tts import save_edge_tts
 
 # ── FastAPI 앱 ────────────────────────────────────────────────────
@@ -861,6 +862,39 @@ async def _process_audio(
         "coord":             zone_info.get("coord", ""),
         "addr":              zone_info.get("addr", ""),
     }
+
+    if os.getenv("SAVE_AUDIO_SAMPLES", "true").lower() == "true":
+        try:
+            min_conf = float(os.getenv("MIN_SAVE_CONFIDENCE", "0.90"))
+            should_save = (
+                decision.situation in {1, 2}
+                or float(sound_event.confidence or 0.0) >= min_conf
+            )
+            if should_save:
+                storage_path = upload_audio_file(tmp_path, zone_id)
+                db = SessionLocal()
+                try:
+                    sample = AudioSample(
+                        zone_id=zone_id,
+                        zone_name=zone_name,
+                        sensor_id=zone_id,
+                        raw_audio_path=storage_path,
+                        beats_label=sound_event.label,
+                        beats_raw_label=sound_event.raw_label,
+                        beats_confidence=float(sound_event.confidence or 0.0),
+                        stt_text=stt_text,
+                        final_result=decision.situation_name,
+                        final_situation=decision.situation,
+                        human_label=None,
+                        review_status="pending",
+                        model_version=os.getenv("MODEL_VERSION", "unknown"),
+                    )
+                    db.add(sample)
+                    db.commit()
+                finally:
+                    db.close()
+        except Exception as exc:
+            print(f"[SUPABASE] audio sample 저장 실패: {exc}")
 
     await broadcast_to_zone(zone_id, payload)
     if decision.situation in {1, 2}:
