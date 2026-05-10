@@ -11,17 +11,13 @@ async def save_edge_tts(text: str, filename: str) -> None:
     """텍스트를 mp3 파일로 저장만 하는 함수 (재생 없음)"""
     try:
         communicate = edge_tts.Communicate(text, VOICE, rate=SPEED)
-
         audio_data = b""
         async for chunk in communicate.stream():
             if chunk["type"] == "audio":
                 audio_data += chunk["data"]
-
         with open(filename, "wb") as f:
             f.write(audio_data)
-
         print(f"💾 TTS 파일 생성 완료: {filename}")
-
     except Exception as e:
         print(f"❌ TTS 파일 생성 실패: {e}")
 

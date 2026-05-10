@@ -440,6 +440,13 @@ class BeatsEnvironmentClassifier:
         if sr != self.sample_rate:
             audio = librosa.resample(audio, orig_sr=sr, target_sr=self.sample_rate)
 
+        # BEATs patch embedding(16x16 커널)이 mel spectrogram에서 최소 16 프레임 필요
+        # 1초 미만 오디오는 제로패딩으로 보충 (짧은 클립 업로드 시 500 크래시 방지)
+        min_samples = self.sample_rate  # 1초
+        if len(audio) < min_samples:
+            print(f"[BEATs] 오디오 길이 부족 ({len(audio)} samples → {min_samples}으로 패딩)")
+            audio = np.pad(audio, (0, min_samples - len(audio)))
+
         peak = float(np.max(np.abs(audio))) if audio.size else 0.0
 
         if peak > 0:
