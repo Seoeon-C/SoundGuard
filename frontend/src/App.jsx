@@ -159,7 +159,7 @@ function LoginScreen({ onLogin }) {
       <div style={{ width:"100%", maxWidth:390 }}>
         {/* 브랜드 */}
         <div style={{ textAlign:"center", marginBottom:28 }}>
-          <div style={{ width:70, height:70, borderRadius:C.rXl, background:C.cyanSoft, border:`1px solid ${C.cyanBorder}`, display:"flex", alignItems:"center", justifyContent:"center", margin:"0 auto 16px" }}><Volume2 size={32} color="var(--sg-cyan)" /></div>
+          <img src="/SoundGuardLogo_0.png" alt="SoundGuard" style={{ width:90, height:90, objectFit:"contain", margin:"0 auto 16px", display:"block" }} />
           <div style={{ fontSize:fs(9), letterSpacing:".2em", textTransform:"uppercase", color:C.t3, marginBottom:7 }}>Sound Guard System</div>
           <div style={{ fontSize:fs(20), fontWeight:800, letterSpacing:"-.02em" }}>음향 기반 위험 예방·구조 시스템</div>
           <div style={{ fontSize:fs(11), color:C.t2, marginTop:5 }}>상황실 관리자 전용</div>
@@ -225,7 +225,7 @@ function ConfigScreen({ adminId, initConfig, onSave, onBack }) {
     <div style={{ display:"flex", flexDirection:"column", minHeight:"100vh" }}>
       {/* 헤더 */}
       <div style={{ display:"flex", alignItems:"center", gap:10, padding:"10px 22px", borderBottom:`1px solid ${C.bd}`, background:C.sf, position:"sticky", top:0, zIndex:20 }}>
-        <div style={{ fontSize:fs(14), fontWeight:800 }}><span style={{display:"inline-flex",alignItems:"center",gap:6}}><Volume2 size={16} color="var(--sg-cyan)" />SoundGuard</span></div>
+        <div style={{ fontSize:fs(14), fontWeight:800 }}><span style={{display:"inline-flex",alignItems:"center",gap:6}}><img src="/SoundGuardLogo.png" alt="SoundGuard" style={{ width:34, height:34, objectFit:"contain" }} />SoundGuard</span></div>
         <div style={{ fontSize:fs(10), color:C.t3, padding:"2px 8px", background:C.panel2, borderRadius:C.rSm }}>안내 멘트 설정</div>
         <div style={{ marginLeft:"auto", display:"flex", alignItems:"center", gap:8 }}>
           <span style={{ fontSize:fs(10), color:C.t2, padding:"2px 8px", border:`1px solid ${C.bd}`, borderRadius:C.rPill }}>{adminId}</span>
@@ -365,7 +365,9 @@ function MainScreen({ adminId, config, serverIP, onGoConfig, onLogout, onUpdateC
     emergencyConfirmed: false,
     timestamp: "대기",
   })
-  const [logsByZone, setLogsByZone] = useState({})
+  const [logsByZone, setLogsByZone] = useState(() => {
+    try { return JSON.parse(localStorage.getItem("sg-logs") || "{}") } catch { return {} }
+  })
   const [clock,    setClock]    = useState(nowStr())
   const [systemUptime, setSystemUptime] = useState(0)
   const [sidebarExpanded, setSidebarExpanded] = useState({ status:false, health:false, zone:false, detection:false, logs:false })
@@ -374,6 +376,8 @@ function MainScreen({ adminId, config, serverIP, onGoConfig, onLogout, onUpdateC
   const reconnectRef = useRef(null)
   const geocodeCacheRef = useRef({})
   const mapPanelRef = useRef(null)
+  const mapIframeRef = useRef(null)
+  const mapStatusRef = useRef({})
   const cctvWindowRef = useRef(null)
   const [cctvWidthPercent, setCctvWidthPercent] = useState(40)
   const [cctvPopupOpen, setCctvPopupOpen] = useState(false)
@@ -576,13 +580,11 @@ function MainScreen({ adminId, config, serverIP, onGoConfig, onLogout, onUpdateC
     }
   }
 
-  /* status 변경 시 CCTV 활성화 상태 저장 */
+  /* 구역 전환 시 CCTV 초기화 */
   useEffect(() => {
-    if (status !== 0) {
-      setCctvLatchedActive(true)
-      setCctvAlertStatus(status)
-    }
-  }, [status])
+    setCctvLatchedActive(false)
+    setCctvPopupOpen(false)
+  }, [selectedZoneId])
 
   /* 새 창이 닫혔는지 0.5초마다 확인 */
   useEffect(() => {
@@ -626,10 +628,14 @@ function MainScreen({ adminId, config, serverIP, onGoConfig, onLogout, onUpdateC
   const addLog = useCallback((type, title, detail, zoneId) => {
     const t = nowStr()
     const zId = zoneId || selectedZoneIdRef.current || "default"
-    setLogsByZone(prev => ({
-      ...prev,
-      [zId]: [{ id:Date.now()+Math.random(), t, type, title, detail }, ...(prev[zId] || [])].slice(0, 100)
-    }))
+    setLogsByZone(prev => {
+      const next = {
+        ...prev,
+        [zId]: [{ id:Date.now()+Math.random(), t, type, title, detail }, ...(prev[zId] || [])].slice(0, 100)
+      }
+      try { localStorage.setItem("sg-logs", JSON.stringify(next)) } catch {}
+      return next
+    })
   }, [])
 
   const sendTtsConfig = useCallback(() => {
@@ -679,10 +685,11 @@ function MainScreen({ adminId, config, serverIP, onGoConfig, onLogout, onUpdateC
   const pushOtherZoneNotification = useCallback((payload) => {
     const zoneId = payload.zone_id || payload.zoneId
     const incomingZoneName = payload.zone_name || payload.zoneName || ""
-    const matchedZone = zonesRef.current.find(z => z.id === zoneId)
+    const matchedZone = zonesRef.current.find(z => z.id === zoneId || z.name === incomingZoneName)
+    const resolvedZoneId = matchedZone?.id || zoneId
     const zoneName = matchedZone?.name || (!looksLikeDeviceName(incomingZoneName) && incomingZoneName) || "관리구역 미지정"
 
-    if (!zoneId || zoneId === selectedZoneIdRef.current) return
+    if (!resolvedZoneId) return
 
     const kind =
       payload.kind ||
@@ -694,12 +701,12 @@ function MainScreen({ adminId, config, serverIP, onGoConfig, onLogout, onUpdateC
 
     setZoneStatusMap(prev => ({
       ...prev,
-      [zoneId]: type,
+      [resolvedZoneId]: type,
     }))
 
     setNotifications(prev => [{
       id: Date.now() + Math.random(),
-      zoneId,
+      zoneId: resolvedZoneId,
       zoneName,
       coord: matchedZone?.coord || payload.coord || payload.map_coord || "37.5665° N, 126.9780° E",
       addr: matchedZone?.addr || payload.addr || payload.address || zoneName,
@@ -964,6 +971,16 @@ function MainScreen({ adminId, config, serverIP, onGoConfig, onLogout, onUpdateC
     sendZonesSync()
   }, [zones, sendZonesSync])
 
+  useEffect(() => {
+    const statuses = {}
+    zones.forEach(z => {
+      statuses[z.id] = z.id === selectedZoneId ? status : (zoneStatusMap[z.id] ?? 0)
+    })
+    if (zones.length === 0) statuses["default"] = status
+    mapStatusRef.current = statuses
+    mapIframeRef.current?.contentWindow?.postMessage({ type: "zone_status", statuses }, "*")
+  }, [status, zoneStatusMap, zones, selectedZoneId])
+
   const togglePause = () => {
     const zoneId = selectedZoneIdRef.current || "default"
     const next = !pausedRef.current
@@ -977,7 +994,8 @@ function MainScreen({ adminId, config, serverIP, onGoConfig, onLogout, onUpdateC
     }
   }
 
-  const unreadCount = notifications.filter(n => !n.read).length
+  const visibleNotifications = notifications.filter(n => n.zoneId !== selectedZoneId)
+  const unreadCount = visibleNotifications.filter(n => !n.read).length
 
   const switchToZone = (notice) => {
     const zone = zones.find(z => z.id === notice.zoneId || z.name === notice.zoneName)
@@ -1255,7 +1273,7 @@ function MainScreen({ adminId, config, serverIP, onGoConfig, onLogout, onUpdateC
         name: z.name,
         coord: z.coord,
         addr: z.addr || z.label || "",
-        status: z.id === selectedZoneId ? status : (zoneStatusMap[z.id] ?? 0),
+        status: 0,
         selected: z.id === selectedZoneId,
       }))
     : [{
@@ -1263,7 +1281,7 @@ function MainScreen({ adminId, config, serverIP, onGoConfig, onLogout, onUpdateC
         name: currentZoneName,
         coord: mapCoord || `${lat}, ${lon}`,
         addr: mapAddr || "관할 구역 주소 미상",
-        status,
+        status: 0,
         selected: true,
       }]
   const mapPayloadZones = zonesForMap.map(z =>
@@ -1342,7 +1360,7 @@ function MainScreen({ adminId, config, serverIP, onGoConfig, onLogout, onUpdateC
       {/* ── 헤더 ── */}
       <div className="sg-dashboard-header">
         <div style={{ display:"flex", alignItems:"center", gap:8 }}>
-          <div style={{ fontSize:fs(14), fontWeight:800, whiteSpace:"nowrap" }}><span style={{display:"inline-flex",alignItems:"center",gap:6}}><Volume2 size={16} color="var(--sg-cyan)" />SoundGuard</span></div>
+          <div style={{ fontSize:fs(14), fontWeight:800, whiteSpace:"nowrap" }}><span style={{display:"inline-flex",alignItems:"center",gap:6}}><img src="/SoundGuardLogo.png" alt="SoundGuard" style={{ width:34, height:34, objectFit:"contain" }} />SoundGuard</span></div>
           <div className="sg-chip"><span style={{display:"inline-flex",alignItems:"center",gap:4}}><User size={11} />{adminId}</span></div>
           <div style={{ display:"flex", alignItems:"center", gap:6, padding:"3px 10px", background:C.panel2, border:`1px solid ${C.bd}`, borderRadius:C.rPill }}>
             <span style={{ display:"inline-block", width:5, height:5, borderRadius:"50%", background:paused?C.amber:C.green, flexShrink:0 }} />
@@ -1392,10 +1410,18 @@ function MainScreen({ adminId, config, serverIP, onGoConfig, onLogout, onUpdateC
 
         {/* 지도 배경 - 전체화면 */}
         <iframe
+          ref={mapIframeRef}
           key={mapSrc}
           title="SoundGuard Map"
           src={mapSrc}
           style={{ position:"absolute", inset:0, width:"100%", height:"100%", border:"none", display:"block" }}
+          onLoad={() => {
+            setTimeout(() => {
+              mapIframeRef.current?.contentWindow?.postMessage(
+                { type: "zone_status", statuses: mapStatusRef.current }, "*"
+              )
+            }, 400)
+          }}
         />
 
         {/* 좌측 플로팅 패널 */}
@@ -1532,7 +1558,7 @@ function MainScreen({ adminId, config, serverIP, onGoConfig, onLogout, onUpdateC
             <div className="sg-panel-head">
               <span className="sg-panel-title">이벤트 로그</span>
               <div className="sg-panel-actions">
-                <button className="sg-text-button" style={{ padding:"2px 6px", fontSize:fs(9) }} onClick={()=>setLogsByZone(prev=>({...prev,[_zoneKey]:[]}))}>초기화</button>
+                <button className="sg-text-button" style={{ padding:"2px 6px", fontSize:fs(9) }} onClick={()=>setLogsByZone(prev=>{const next={...prev,[_zoneKey]:[]};try{localStorage.setItem("sg-logs",JSON.stringify(next))}catch{};return next})}>초기화</button>
                 <button
                   className="sg-sidebar-toggle"
                   onClick={() => toggleSidebarSection("logs")}
@@ -1806,10 +1832,10 @@ function MainScreen({ adminId, config, serverIP, onGoConfig, onLogout, onUpdateC
               </div>
             </div>
             <div style={{ overflowY:"auto", flex:1 }}>
-              {notifications.length === 0 ? (
+              {visibleNotifications.length === 0 ? (
                 <div style={{ padding:"28px 16px", textAlign:"center", color:C.t3, fontSize:fs(11) }}>다른 관리구역의 알림이 없습니다</div>
               ) : (
-                notifications.map(n => (
+                visibleNotifications.map(n => (
                   <div
                     key={n.id}
                     style={{ padding:"10px 14px", borderBottom:`1px solid ${C.bd}`, cursor:"pointer", background: n.read ? "transparent" : C.cyanSoft, transition:"background .15s" }}

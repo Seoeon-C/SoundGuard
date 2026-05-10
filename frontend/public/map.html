@@ -127,12 +127,10 @@
     }
 
     const bounds = [];
+    const markerMap = {};  // zoneId → { marker, zone }
 
-    parsedZones.forEach(z => {
-      const cls = statusClass(z.status);
-      const selected = z.selected ? "selected" : "";
-
-      const icon = L.divIcon({
+    function makeIcon(cls, selected) {
+      return L.divIcon({
         className: "",
         html: `<div class="zone-marker ${cls} ${selected}">
                  <div class="ring"></div>
@@ -142,25 +140,44 @@
         iconAnchor: [21, 21],
         popupAnchor: [0, -22],
       });
+    }
 
-      L.marker(z.latlon, { icon })
+    parsedZones.forEach(z => {
+      const cls = statusClass(z.status);
+      const sel = z.selected ? "selected" : "";
+      const marker = L.marker(z.latlon, { icon: makeIcon(cls, sel) })
         .addTo(map)
         .bindPopup(
           `${escapeHtml(z.name || "관리구역 미지정")}<br>` +
           `<small style="color:#94a3b8">${escapeHtml(z.addr || "주소 미상")} / ${escapeHtml(z.coord || "")}</small><br>` +
-          `<small style="color:#cbd5e1">상태: ${statusText(z.status)}</small>`
+          `<small style="color:#cbd5e1" class="popup-status">상태: ${statusText(z.status)}</small>`
         );
-
+      markerMap[z.id || "default"] = { marker, zone: z, currentStatus: z.status };
       bounds.push(z.latlon);
     });
 
-    if (bounds.length >= 2) {
+    function updateZoneStatuses(statuses) {
+      Object.entries(statuses).forEach(([zoneId, newStatus]) => {
+        const entry = markerMap[zoneId];
+        if (!entry) return;
+        entry.currentStatus = newStatus;
+        entry.marker.setIcon(makeIcon(statusClass(newStatus), entry.zone.selected ? "selected" : ""));
+      });
+    }
+
+    window.addEventListener("message", (event) => {
+      if (event.data?.type === "zone_status") updateZoneStatuses(event.data.statuses);
+    });
+
+    const selectedZone = parsedZones.find(z => z.selected);
+    if (selectedZone) {
+      map.setView(selectedZone.latlon, 16);
+    } else if (bounds.length >= 2) {
       map.fitBounds(bounds, { padding: [45, 45], maxZoom: 15 });
     } else if (bounds.length === 1) {
       map.setView(bounds[0], 16);
     }
 
-    const selectedZone = parsedZones.find(z => z.selected);
     if (selectedZone) {
       map.eachLayer(layer => {
         if (layer instanceof L.Marker) {

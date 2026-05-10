@@ -1,5 +1,0 @@
-dotenv
-fastapi
-uvicorn
-openai
-pygame
