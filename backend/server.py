@@ -41,7 +41,7 @@ from decision import GPTDecisionEngine, DecisionResult
 from output import EventLoggerAndMessenger
 from db import Zone, AudioSample, get_db, init_db, ZONE_LABELS, SessionLocal
 from supabase_audio import upload_audio_file
-from tts_to_mp3.tts import save_edge_tts
+from tts import save_edge_tts
 
 # ── FastAPI 앱 ────────────────────────────────────────────────────
 app = FastAPI()

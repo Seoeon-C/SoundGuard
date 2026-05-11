@@ -1,1 +1,0 @@
-"""SoundGuard backend package."""
