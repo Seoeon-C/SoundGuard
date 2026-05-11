@@ -47,7 +47,7 @@ mp3 다운로드 후 스피커 재생
 [lib/main.dart](lib/main.dart) 상단의 `kServerHost` 값을 서버 IP로 변경:
 
 ```dart
-const kServerHost = "168.107.31.37:8000";
+const kServerHost = "<서버_공인IP>:8000";
 ```
 
 ---
