@@ -906,7 +906,7 @@ body.sg-theme-light .sg-left-float .sg-card {
 
 .sg-float-popup--sound {
   flex: 0 0 340px;
-  height: 270px;
+  height: auto;
 }
 
 .sg-float-popup--decision {

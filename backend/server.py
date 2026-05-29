@@ -367,15 +367,14 @@ def make_beats_scores(sound_event, decision) -> dict:
     top_dict = dict(getattr(sound_event, "top_labels", []) or [])
     if top_dict:
         scores = {k: int(top_dict.get(k, 0) * 100)
-                  for k in ("background", "speech", "footsteps", "interaction", "impact_noise")}
+                  for k in ("background", "speech", "interact", "impact_noise")}
         scores["emergency"] = 0
         return scores
     raw = getattr(sound_event, "raw_label", "")
     scores = {
         "background":   90 if decision.situation == 0 else 5,
         "speech":       80 if raw == "speech"       else 0,
-        "footsteps":    80 if raw == "footsteps"    else 0,
-        "interaction":  80 if raw == "interaction"  else 0,
+        "interact":     80 if raw == "interact"     else 0,
         "impact_noise": 80 if raw == "impact_noise" else 0,
     }
     scores["emergency"] = 0

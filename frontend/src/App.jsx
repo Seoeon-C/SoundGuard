@@ -51,12 +51,11 @@ const LOG_COLORS = {
 }
 
 const SOUND_LABEL_TEXT = {
-  background: "배경음",
-  speech: "사람 목소리",
-  footsteps: "발소리",
-  interaction: "문소리",
-  impact_noise: "충격음",
-  emergency: "응급음",
+  background:   "환경음",
+  speech:       "말소리",
+  interact:     "기타",
+  impact_noise: "큰소리",
+  emergency:    "응급음",
   low_volume: "작은 소리",
   empty: "무음",
 }
@@ -369,7 +368,7 @@ function MainScreen({ adminId, config, serverIP, onGoConfig, onLogout, onUpdateC
   const [detected, setDetected] = useState(false)
   const [elapsed,  setElapsed]  = useState(0)
   const [personEl, setPersonEl] = useState(0)
-  const [beats,    setBeats]    = useState({ background:0, speech:0, footsteps:0, interaction:0, impact_noise:0, emergency:0 })
+  const [beats,    setBeats]    = useState({ background:0, speech:0, interact:0, impact_noise:0, emergency:0 })
   const [beatsTs,  setBeatsTs]  = useState("대기")
   const [lastSnd,  setLastSnd]  = useState("서버 연결 대기")
   const [curMsg,   setCurMsg]   = useState(null)
@@ -631,7 +630,7 @@ function MainScreen({ adminId, config, serverIP, onGoConfig, onLogout, onUpdateC
     setElapsed(0)
     setPersonEl(0)
     setCurMsg(null)
-    setBeats({ background:0, speech:0, footsteps:0, interaction:0, impact_noise:0, emergency:0 })
+    setBeats({ background:0, speech:0, interact:0, impact_noise:0, emergency:0 })
     setBeatsTs("대기")
     setLastSnd("서버 연결 대기")
     setDecisionMeta({
@@ -898,8 +897,7 @@ function MainScreen({ adminId, config, serverIP, onGoConfig, onLogout, onUpdateC
           const fallbackBeats = {
             background:   situation === 0 ? 90 : 5,
             speech:       0,
-            footsteps:    0,
-            interaction:  0,
+            interact:     0,
             impact_noise: situation === 2 ? 80 : 0,
             emergency:    0,
           }
@@ -1035,7 +1033,7 @@ function MainScreen({ adminId, config, serverIP, onGoConfig, onLogout, onUpdateC
           emergencyConfirmed: false,
           timestamp: "연결 끊김",
         })
-        setBeats({ background:0, speech:0, footsteps:0, interaction:0, impact_noise:0, emergency:0 })
+        setBeats({ background:0, speech:0, interact:0, impact_noise:0, emergency:0 })
         setBeatsTs("연결 끊김")
         setLastSnd("서버 연결 끊김")
         addLog("sys", "백엔드 연결 끊김", "3초 후 재연결")
@@ -1403,12 +1401,10 @@ function MainScreen({ adminId, config, serverIP, onGoConfig, onLogout, onUpdateC
   const cctvBottomAreaSt = { ...cctvAreaSt, minHeight:260, height:"100%" }
 
   const soundItems = [
-    { key:"background",  label:"배경음",     value:Number(beats.background  || 0), color:C.green  },
-    { key:"speech",      label:"사람 목소리", value:Number(beats.speech      || 0), color:C.cyan   },
-    { key:"footsteps",   label:"발소리",      value:Number(beats.footsteps   || 0), color:C.amber  },
-    { key:"interaction", label:"문소리",      value:Number(beats.interaction || 0), color:C.violet },
-    { key:"impact_noise",label:"충격음",      value:Number(beats.impact_noise|| 0), color:C.red    },
-    { key:"emergency",   label:"응급음",      value:Number(beats.emergency   || 0), color:C.red    },
+    { key:"background",  label:"환경음", value:Number(beats.background  || 0), color:C.green  },
+    { key:"speech",      label:"말소리", value:Number(beats.speech      || 0), color:C.cyan   },
+    { key:"impact_noise",label:"큰소리", value:Number(beats.impact_noise|| 0), color:C.red    },
+    { key:"interact",    label:"기타",   value:Number(beats.interact    || 0), color:C.violet },
   ]
   const dominantSound = soundItems.reduce((best, item) => item.value > best.value ? item : best, soundItems[0])
   const dominantSoundValue = Math.round(Math.max(0, Math.min(100, Number(dominantSound.value) || 0)))
