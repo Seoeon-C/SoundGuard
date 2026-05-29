@@ -107,6 +107,11 @@ def get_labels():
     return ZONE_LABELS
 
 
+@app.get("/api/tts-config")
+def get_tts_config():
+    return {"global": CUSTOM_TTS_MESSAGES, "zones": ZONE_TTS_MESSAGES}
+
+
 @app.get("/api/zones")
 def get_zones(db: Session = Depends(get_db)):
     zones = db.query(Zone).order_by(Zone.created_at).all()
@@ -221,7 +226,7 @@ ai: SharedAI | None = None
 
 
 async def _generate_tts_files(tts_dir: Path) -> None:
-    """TTS mp3 파일 생성 (백그라운드 실행)"""
+    """전역 TTS mp3 파일 생성 (백그라운드 실행)"""
     messages = {
         k: (CUSTOM_TTS_MESSAGES.get(k) or DEFAULT_TTS_MESSAGES.get(k, ""))
         for k in ["INTRUSION_WARN_1", "INTRUSION_WARN_2", "EMERGENCY_GUIDE"]
@@ -232,7 +237,23 @@ async def _generate_tts_files(tts_dir: Path) -> None:
     ]
     if tasks:
         await asyncio.gather(*tasks)
-    print("[TTS] mp3 생성 완료")
+    print("[TTS] 전역 mp3 생성 완료")
+
+
+async def _generate_zone_tts_files(zone_id: str, tts_dir: Path) -> None:
+    """구역별 TTS mp3 파일 생성 (백그라운드 실행)"""
+    zone_msgs = ZONE_TTS_MESSAGES.get(zone_id, {})
+    messages = {
+        k: (zone_msgs.get(k) or DEFAULT_TTS_MESSAGES.get(k, ""))
+        for k in ["INTRUSION_WARN_1", "INTRUSION_WARN_2", "EMERGENCY_GUIDE"]
+    }
+    tasks = [
+        save_edge_tts(text.strip(), str(tts_dir / f"{zone_id}_{key}.mp3"))
+        for key, text in messages.items() if text.strip()
+    ]
+    if tasks:
+        await asyncio.gather(*tasks)
+    print(f"[TTS] 구역 {zone_id} mp3 생성 완료")
 
 
 @app.on_event("startup")
@@ -278,12 +299,15 @@ DEFAULT_TTS_MESSAGES = {
     "EMERGENCY_GUIDE": "응급 상황이 감지되었습니다. 가능한 경우 안전한 위치로 이동하고 구조 안내를 기다려 주세요.",
 }
 
-# 웹 대시보드에서 설정한 멘트 - 전역으로 관리하여 sensor 처리에도 반영
+# 웹 대시보드에서 설정한 멘트 - 전역 폴백
 CUSTOM_TTS_MESSAGES = {
     "INTRUSION_WARN_1": "",
     "INTRUSION_WARN_2": "",
     "EMERGENCY_GUIDE": "",
 }
+
+# 구역별 TTS 멘트 - { zone_id: { "INTRUSION_WARN_1": "...", ... } }
+ZONE_TTS_MESSAGES: dict[str, dict] = {}
 
 _TTS_CONFIG_PATH = BACKEND_DIR / "assets/tts_config.json"
 
@@ -297,6 +321,8 @@ def _load_custom_tts():
             for k in CUSTOM_TTS_MESSAGES:
                 if data.get(k):
                     CUSTOM_TTS_MESSAGES[k] = data[k]
+            if isinstance(data.get("zones"), dict):
+                ZONE_TTS_MESSAGES.update(data["zones"])
             print("[TTS] 저장된 안내 멘트 설정 복원 완료")
         except Exception:
             pass
@@ -307,7 +333,7 @@ def _save_custom_tts():
     import json as _json
     _TTS_CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
     _TTS_CONFIG_PATH.write_text(
-        _json.dumps(CUSTOM_TTS_MESSAGES, ensure_ascii=False, indent=2),
+        _json.dumps({**CUSTOM_TTS_MESSAGES, "zones": ZONE_TTS_MESSAGES}, ensure_ascii=False, indent=2),
         encoding="utf-8"
     )
 
@@ -341,15 +367,14 @@ def make_beats_scores(sound_event, decision) -> dict:
     top_dict = dict(getattr(sound_event, "top_labels", []) or [])
     if top_dict:
         scores = {k: int(top_dict.get(k, 0) * 100)
-                  for k in ("background", "speech", "footsteps", "interaction", "impact_noise")}
+                  for k in ("background", "speech", "interact", "impact_noise")}
         scores["emergency"] = 0
         return scores
     raw = getattr(sound_event, "raw_label", "")
     scores = {
         "background":   90 if decision.situation == 0 else 5,
         "speech":       80 if raw == "speech"       else 0,
-        "footsteps":    80 if raw == "footsteps"    else 0,
-        "interaction":  80 if raw == "interaction"  else 0,
+        "interact":     80 if raw == "interact"     else 0,
         "impact_noise": 80 if raw == "impact_noise" else 0,
     }
     scores["emergency"] = 0
@@ -483,18 +508,38 @@ async def dashboard_endpoint(websocket: WebSocket):
             msg_type = raw.get("type")
 
             if msg_type == "tts_config":
-                changed = False
-                for key, env_key in [("INTRUSION_WARN_1","w1"),("INTRUSION_WARN_2","w2"),("EMERGENCY_GUIDE","emg")]:
-                    val = (raw.get(env_key) or "").strip()
-                    if val and val != CUSTOM_TTS_MESSAGES.get(key):
-                        CUSTOM_TTS_MESSAGES[key] = val
-                        changed = True
-                if changed:
-                    _save_custom_tts()
-                    asyncio.create_task(_generate_tts_files(tts_dir))
-                    print("[DASHBOARD] 안내 멘트 변경 감지 → mp3 백그라운드 생성 중")
+                zone_id_cfg = (raw.get("zone_id") or "").strip()
+                if zone_id_cfg:
+                    # 구역별 멘트 업데이트
+                    zone_config = ZONE_TTS_MESSAGES.setdefault(zone_id_cfg, {})
+                    changed = False
+                    for key, env_key in [("INTRUSION_WARN_1","w1"),("INTRUSION_WARN_2","w2"),("EMERGENCY_GUIDE","emg")]:
+                        val = (raw.get(env_key) or "").strip()
+                        if val != zone_config.get(key, ""):
+                            zone_config[key] = val
+                            changed = True
+                    if changed:
+                        _save_custom_tts()
+                        asyncio.create_task(_generate_zone_tts_files(zone_id_cfg, tts_dir))
+                        await broadcast({"type": "tts_config_updated", "zones": ZONE_TTS_MESSAGES, "global": CUSTOM_TTS_MESSAGES})
+                        print(f"[DASHBOARD] 구역 {zone_id_cfg} 안내 멘트 변경 → mp3 생성 중")
+                    else:
+                        print(f"[DASHBOARD] 구역 {zone_id_cfg} 안내 멘트 변경 없음")
                 else:
-                    print("[DASHBOARD] 안내 멘트 변경 없음 → mp3 재생성 생략")
+                    # 전역 멘트 업데이트 (하위 호환 / 초기 설정)
+                    changed = False
+                    for key, env_key in [("INTRUSION_WARN_1","w1"),("INTRUSION_WARN_2","w2"),("EMERGENCY_GUIDE","emg")]:
+                        val = (raw.get(env_key) or "").strip()
+                        if val and val != CUSTOM_TTS_MESSAGES.get(key):
+                            CUSTOM_TTS_MESSAGES[key] = val
+                            changed = True
+                    if changed:
+                        _save_custom_tts()
+                        asyncio.create_task(_generate_tts_files(tts_dir))
+                        await broadcast({"type": "tts_config_updated", "zones": ZONE_TTS_MESSAGES, "global": CUSTOM_TTS_MESSAGES})
+                        print("[DASHBOARD] 전역 안내 멘트 변경 → mp3 생성 중")
+                    else:
+                        print("[DASHBOARD] 안내 멘트 변경 없음")
 
             elif msg_type == "pause":
                 zone_id = raw.get("zone_id") or "default"
@@ -614,9 +659,13 @@ async def sensor_endpoint(websocket: WebSocket):
                 latest_chunk = None
                 try:
                     decision = await _process_audio(chunk, sample_rate, zone_info, zone_state, tmp_path)
-                    # TTS 결과를 센서 앱으로 전송
+                    # TTS 결과를 센서 앱으로 전송 (구역별 mp3 우선, 없으면 전역)
                     if decision and decision.tts_key not in ("NONE", None, ""):
-                        tts_url = f"{SERVER_PUBLIC_URL}/tts/{decision.tts_key}.mp3"
+                        zone_mp3 = _tts_dir / f"{zone_id}_{decision.tts_key}.mp3"
+                        if zone_mp3.exists():
+                            tts_url = f"{SERVER_PUBLIC_URL}/tts/{zone_id}_{decision.tts_key}.mp3"
+                        else:
+                            tts_url = f"{SERVER_PUBLIC_URL}/tts/{decision.tts_key}.mp3"
                         try:
                             await websocket.send_json({"type": "tts", "announcement_url": tts_url})
                         except Exception:
@@ -845,8 +894,10 @@ async def _process_audio(
 
     tts_message = ""
     if decision.tts_key != "NONE":
+        zone_msgs = ZONE_TTS_MESSAGES.get(zone_id, {})
         tts_message = (
-            CUSTOM_TTS_MESSAGES.get(decision.tts_key)
+            zone_msgs.get(decision.tts_key)
+            or CUSTOM_TTS_MESSAGES.get(decision.tts_key)
             or DEFAULT_TTS_MESSAGES.get(decision.tts_key, "")
         )
 
@@ -976,11 +1027,14 @@ async def upload_audio(file: UploadFile = File(...), device_id: str = Form(...),
             audio_np.tobytes(), sample_rate, zone_info, zone_state, tmp_path
         )
 
-    # tts_key → .mp3 URL
+    # tts_key → .mp3 URL (구역별 mp3 우선, 없으면 전역)
     announcement_url = ""
     if decision and decision.tts_key not in ("NONE", None, ""):
-        mp3_path = _tts_dir / f"{decision.tts_key}.mp3"
-        if mp3_path.exists():
+        zone_mp3 = _tts_dir / f"{device_id}_{decision.tts_key}.mp3"
+        global_mp3 = _tts_dir / f"{decision.tts_key}.mp3"
+        if zone_mp3.exists():
+            announcement_url = f"{SERVER_PUBLIC_URL}/tts/{device_id}_{decision.tts_key}.mp3"
+        elif global_mp3.exists():
             announcement_url = f"{SERVER_PUBLIC_URL}/tts/{decision.tts_key}.mp3"
     ZONE_LAST_URL[device_id] = announcement_url
 
