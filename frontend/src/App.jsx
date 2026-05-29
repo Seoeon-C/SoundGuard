@@ -285,53 +285,58 @@ function ConfigScreen({ adminId, initConfig, onSave, onBack }) {
 }
 
 /* ════════════════════════════════════════════════════════════
-   모달 컴포넌트: 멘트 수정 전용 오버레이
+   모달 컴포넌트: 멘트 수정 전용 오버레이 (구역별)
 ════════════════════════════════════════════════════════════ */
-function MentEditOverlay({ config, onUpdateConfig, onClose, wsRef }) {
-  const [w1, setW1] = useState(config.w1)
-  const [w2, setW2] = useState(config.w2)
-  const [emg, setEmg] = useState(config.emg)
+function MentEditOverlay({ zoneName, zoneId, zoneTtsConfigs, onUpdateZoneTts, onClose, wsRef }) {
+  const zoneConfig = (zoneTtsConfigs || {})[zoneId] || {}
+  const [w1, setW1] = useState(zoneConfig.w1 || DEFAULT_MSGS.w1)
+  const [w2, setW2] = useState(zoneConfig.w2 || DEFAULT_MSGS.w2)
+  const [emg, setEmg] = useState(zoneConfig.emg || DEFAULT_MSGS.emg)
 
   const save = () => {
     const next = {
-      ...config,
       w1: (w1 || "").trim(),
       w2: (w2 || "").trim(),
       emg: (emg || "").trim(),
     }
-
-    onUpdateConfig(next)
-
+    onUpdateZoneTts(zoneId, next)
     if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
       wsRef.current.send(JSON.stringify({
         type: "tts_config",
+        zone_id: zoneId,
         w1: next.w1,
         w2: next.w2,
         emg: next.emg,
       }))
     }
-
     onClose()
   }
 
   return (
     <div style={{ background:C.bg, width:600, maxHeight:"90vh", overflowY:"auto", borderRadius:C.rXl, border:`1px solid ${C.bd2}`, display:"flex", flexDirection:"column" }}>
       <div style={{ padding:"16px 20px", borderBottom:`1px solid ${C.bd}`, background:C.sf, display:"flex", justifyContent:"space-between", alignItems:"center", position:"sticky", top:0, zIndex:10 }}>
-        <div style={{ fontSize:fs(16), fontWeight:800, color:C.cyan }}>🚨 수정 창 🚨</div>
+        <div>
+          <div style={{ fontSize:fs(16), fontWeight:800, color:C.cyan }}>안내 멘트 수정</div>
+          <div style={{ fontSize:fs(11), color:C.t2, marginTop:3, display:"flex", alignItems:"center", gap:5 }}>
+            <MapPin size={12} color={C.cyan} />
+            <span style={{ color:C.t1, fontWeight:700 }}>{zoneName || "구역 미지정"}</span>
+            <span style={{ color:C.t3 }}>구역에만 적용됩니다</span>
+          </div>
+        </div>
         <button className="sg-text-button" onClick={onClose}>✕ 닫기</button>
       </div>
       <div style={{ padding:"24px" }}>
         <div style={{ marginBottom:16 }}>
           <label className="sg-label">1차 경고 멘트 수정</label>
-          <textarea className="sg-input sg-input--textarea" value={w1} onChange={e=>setW1(e.target.value)} />
+          <textarea className="sg-input sg-input--textarea" value={w1} onChange={e=>setW1(e.target.value)} placeholder={DEFAULT_MSGS.w1} />
         </div>
         <div style={{ marginBottom:16 }}>
           <label className="sg-label">2차 경고 멘트 수정</label>
-          <textarea className="sg-input sg-input--textarea" value={w2} onChange={e=>setW2(e.target.value)} />
+          <textarea className="sg-input sg-input--textarea" value={w2} onChange={e=>setW2(e.target.value)} placeholder={DEFAULT_MSGS.w2} />
         </div>
         <div style={{ marginBottom:24 }}>
           <label className="sg-label">위험 감지 응급 멘트 수정</label>
-          <textarea className="sg-input sg-input--textarea" value={emg} onChange={e=>setEmg(e.target.value)} />
+          <textarea className="sg-input sg-input--textarea" value={emg} onChange={e=>setEmg(e.target.value)} placeholder={DEFAULT_MSGS.emg} />
         </div>
         <button className="sg-button-primary" onClick={save}>수정 내용 적용하기</button>
       </div>
@@ -384,6 +389,7 @@ function MainScreen({ adminId, config, serverIP, onGoConfig, onLogout, onUpdateC
   const [cctvLatchedActive, setCctvLatchedActive] = useState(false)
   const [cctvAlertStatus, setCctvAlertStatus] = useState(1)
 
+  const [zoneTtsConfigs, setZoneTtsConfigs] = useState({})
   const [mentPopup, setMentPopup] = useState(false)
   const [mentEditModal, setMentEditModal] = useState(false)
   const [zoneModal, setZoneModal] = useState(false)
@@ -466,6 +472,26 @@ function MainScreen({ adminId, config, serverIP, onGoConfig, onLogout, onUpdateC
           onUpdateConfig({ ...configRef.current, zone: first.name })
           setMapCoord(first.coord || "37.5665° N, 126.9780° E")
           setMapAddr(first.addr || first.label || "")
+        }
+      })
+      .catch(() => {})
+  }, [])
+
+  /* 서버에서 구역별 TTS 설정 로드 */
+  useEffect(() => {
+    fetch(`${API_BASE}/api/tts-config`)
+      .then(r => r.json())
+      .then(data => {
+        if (data.zones && typeof data.zones === "object") {
+          const mapped = {}
+          for (const [zId, cfg] of Object.entries(data.zones)) {
+            mapped[zId] = {
+              w1:  cfg.w1  || cfg.INTRUSION_WARN_1 || "",
+              w2:  cfg.w2  || cfg.INTRUSION_WARN_2 || "",
+              emg: cfg.emg || cfg.EMERGENCY_GUIDE   || "",
+            }
+          }
+          setZoneTtsConfigs(mapped)
         }
       })
       .catch(() => {})
@@ -580,10 +606,31 @@ function MainScreen({ adminId, config, serverIP, onGoConfig, onLogout, onUpdateC
     }
   }
 
-  /* 구역 전환 시 CCTV 초기화 */
+  /* 구역 전환 시 화면 상태 초기화 */
   useEffect(() => {
+    if (!selectedZoneId) return
     setCctvLatchedActive(false)
     setCctvPopupOpen(false)
+    setStatus(zoneStatusMap[selectedZoneId] ?? 0)
+    setDetected(false)
+    setElapsed(0)
+    setPersonEl(0)
+    setCurMsg(null)
+    setBeats({ background:0, speech:0, footsteps:0, interaction:0, impact_noise:0, emergency:0 })
+    setBeatsTs("대기")
+    setLastSnd("서버 연결 대기")
+    setDecisionMeta({
+      situationName: "대기",
+      source: "대기",
+      reason: "서버 분석 결과를 기다리는 중입니다",
+      action: "감시 대기",
+      beatsLabel: "—",
+      beatsRawLabel: "—",
+      sttText: "",
+      ttsKey: "NONE",
+      emergencyConfirmed: false,
+      timestamp: "대기",
+    })
   }, [selectedZoneId])
 
   /* 새 창이 닫혔는지 0.5초마다 확인 */
@@ -704,6 +751,14 @@ function MainScreen({ adminId, config, serverIP, onGoConfig, onLogout, onUpdateC
       [resolvedZoneId]: type,
     }))
 
+    // B 구역 로그에 이벤트 기록 (구역 전환 시 이력 확인용)
+    const logTitle =
+      kind === "emergency" ? "위험감지 - 응급 안내 방송" :
+      kind === "warn2"     ? "무단침입 - 2차 경고 방송" :
+                             "무단침입 - 1차 경고 방송"
+    const logDetail = payload.message || payload.reason || ""
+    addLog(kind === "emergency" ? 2 : 1, logTitle, logDetail, resolvedZoneId)
+
     setNotifications(prev => [{
       id: Date.now() + Math.random(),
       zoneId: resolvedZoneId,
@@ -721,7 +776,7 @@ function MainScreen({ adminId, config, serverIP, onGoConfig, onLogout, onUpdateC
       time: payload.timestamp || nowStr(),
       read: false,
     }, ...prev].slice(0, 30))
-  }, [])
+  }, [addLog])
 
   useEffect(() => {
     let closed = false
@@ -760,6 +815,21 @@ function MainScreen({ adminId, config, serverIP, onGoConfig, onLogout, onUpdateC
       ws.onmessage = (event) => {
         const data = JSON.parse(event.data)
         console.log("📡 서버 데이터:", data)
+
+        if (data.type === "tts_config_updated") {
+          if (data.zones && typeof data.zones === "object") {
+            const mapped = {}
+            for (const [zId, cfg] of Object.entries(data.zones)) {
+              mapped[zId] = {
+                w1:  cfg.w1  || cfg.INTRUSION_WARN_1 || "",
+                w2:  cfg.w2  || cfg.INTRUSION_WARN_2 || "",
+                emg: cfg.emg || cfg.EMERGENCY_GUIDE   || "",
+              }
+            }
+            setZoneTtsConfigs(mapped)
+          }
+          return
+        }
 
         if (data.type === "zone_alert") {
           pushOtherZoneNotification(data)
@@ -1690,7 +1760,11 @@ function MainScreen({ adminId, config, serverIP, onGoConfig, onLogout, onUpdateC
       {mentPopup && (
         <div className="sg-modal-overlay">
           <div style={{ background:C.card, padding:24, borderRadius:C.rXl, border:`1px solid ${C.bd2}`, width:300, textAlign:"center" }}>
-            <div style={{ fontSize:fs(16), fontWeight:800, marginBottom:20 }}>안내 멘트 설정 메뉴</div>
+            <div style={{ fontSize:fs(16), fontWeight:800, marginBottom:6 }}>안내 멘트 설정</div>
+            <div style={{ fontSize:fs(11), color:C.t2, marginBottom:18, display:"flex", alignItems:"center", justifyContent:"center", gap:5 }}>
+              <MapPin size={12} color={C.cyan} />
+              <span style={{ color:C.t1, fontWeight:700 }}>{currentZoneName}</span>
+            </div>
             <div style={{ display:"flex", flexDirection:"column", gap:10 }}>
               <button className="sg-button-primary sg-button-primary--secondary" onClick={() => { setMentPopup(false); onGoConfig(); }}>초기 설정 (시스템 초기화)</button>
               <button className="sg-button-primary" onClick={() => { setMentPopup(false); setMentEditModal(true); }}>멘트 수정 (현재 상태 유지)</button>
@@ -1702,7 +1776,14 @@ function MainScreen({ adminId, config, serverIP, onGoConfig, onLogout, onUpdateC
 
       {mentEditModal && (
         <div className="sg-modal-overlay">
-          <MentEditOverlay config={config} onUpdateConfig={onUpdateConfig} onClose={() => setMentEditModal(false)} wsRef={wsRef} />
+          <MentEditOverlay
+            zoneName={currentZoneName}
+            zoneId={selectedZoneId || "default"}
+            zoneTtsConfigs={zoneTtsConfigs}
+            onUpdateZoneTts={(zId, next) => setZoneTtsConfigs(prev => ({ ...prev, [zId]: next }))}
+            onClose={() => setMentEditModal(false)}
+            wsRef={wsRef}
+          />
         </div>
       )}
 
