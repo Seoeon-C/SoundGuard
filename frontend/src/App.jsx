@@ -19,6 +19,21 @@ const C = {
   mono:"var(--sg-font-mono)", sans:"var(--sg-font-sans)", shadowLg:"var(--sg-shadow-lg)",
 }
 
+const CCTV_VIDEOS = ["/wall.mp4", "/camping.mp4", "/crossover.mp4"]
+const ZONE_VIDEO_MAP = {
+  "음성체육공원": "/wall.mp4",
+  "화곡저수지":   "/wall.mp4",
+  "봉황자연휴양림 야영장": "/camping.mp4",
+  "문성자연휴양림": "/camping.mp4",
+  "2차전지 공장":  "/crossover.mp4",
+  "심항산 등산로":  "/crossover.mp4",
+}
+function getZoneVideo(zoneName, zoneId) {
+  if (ZONE_VIDEO_MAP[zoneName]) return ZONE_VIDEO_MAP[zoneName]
+  const seed = (zoneId || zoneName || "").split("").reduce((a, c) => a + c.charCodeAt(0), 0)
+  return CCTV_VIDEOS[seed % CCTV_VIDEOS.length]
+}
+
 const STATUS_DATA = {
   0:{ c:C.green, bg:C.greenSoft, bd:C.greenBorder, Ico:ShieldCheck,    tag:"현재 상태 · 정상",  name:"정상",    desc:"구역이 정상적으로 관리 중입니다" },
   1:{ c:C.amber, bg:C.amberSoft, bd:C.amberBorder, Ico:AlertTriangle,  tag:"현재 상태 · 경고",  name:"무단침입", desc:"비허가 인원 진입 감지 — 경고 방송 송출 중" },
@@ -1210,7 +1225,8 @@ function MainScreen({ adminId, config, serverIP, onGoConfig, onLogout, onUpdateC
 
   const cctvEventActive = cctvLatchedActive
   const cctvVisible = cctvEventActive && !cctvPopupOpen
-  const cctvVideoSrc = "/test_video.mp4"
+  const _selectedZoneName = zones.find(z => z.id === selectedZoneId)?.name || ""
+  const cctvVideoSrc = getZoneVideo(_selectedZoneName, selectedZoneId)
   const cctvStatus = cctvAlertStatus || 1
 
   const closeCctvView = () => {
