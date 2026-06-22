@@ -31,16 +31,14 @@ RESULT_LABELS = {
 PROJECT_TASK_LABELS = [
     "background",
     "speech",
-    "footsteps",
-    "interaction",
+    "interact",
     "impact_noise",
 ]
 
 PROJECT_LABEL_TO_RESULT = {
     "background":  (0, RESULT_LABELS[0]),
     "speech":      (1, RESULT_LABELS[1]),
-    "footsteps":   (1, RESULT_LABELS[1]),
-    "interaction": (1, RESULT_LABELS[1]),
+    "interact":    (1, RESULT_LABELS[1]),
     "impact_noise":(2, RESULT_LABELS[2]),
 }
 
