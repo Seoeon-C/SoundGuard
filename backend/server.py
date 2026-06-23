@@ -39,7 +39,10 @@ from environmental_sound import BeatsEnvironmentClassifier, SoundEvent
 from stt import WhisperAPI
 from decision import GPTDecisionEngine, DecisionResult
 from output import EventLoggerAndMessenger
-from db import Zone, AudioSample, get_db, init_db, ZONE_LABELS, SessionLocal, hash_sensor_id, generalize_coord
+from db import (
+    Zone, AudioSample, get_db, init_db, ZONE_LABELS, SessionLocal,
+    hash_sensor_id, generalize_coord, log_audit, purge_expired_audio_samples,
+)
 from supabase_audio import upload_audio_file
 from tts import save_edge_tts
 
@@ -130,6 +133,7 @@ def create_zone(body: dict = Body(...), db: Session = Depends(get_db)):
     )
     db.add(zone)
     db.commit()
+    log_audit(db, actor="dashboard", action="create", target_table="zones", target_id=zone.id)
     return {"id": zone.id, "name": zone.name, "label": zone.label, "coord": zone.coord}
 
 
@@ -144,6 +148,7 @@ def update_zone(zone_id: str, body: dict = Body(...), db: Session = Depends(get_
         zone.coord = body["coord"]
         zone.region_code = generalize_coord(body["coord"])
     db.commit()
+    log_audit(db, actor="dashboard", action="update", target_table="zones", target_id=zone.id)
     return {"id": zone.id, "name": zone.name, "label": zone.label, "coord": zone.coord}
 
 
@@ -153,6 +158,7 @@ def delete_zone(zone_id: str, db: Session = Depends(get_db)):
     if zone:
         db.delete(zone)
         db.commit()
+        log_audit(db, actor="dashboard", action="delete", target_table="zones", target_id=zone_id)
     return {"ok": True}
 
 
@@ -260,6 +266,20 @@ async def _generate_zone_tts_files(zone_id: str, tts_dir: Path) -> None:
     print(f"[TTS] 구역 {zone_id} mp3 생성 완료")
 
 
+async def _retention_purge_loop():
+    while True:
+        db = SessionLocal()
+        try:
+            count = purge_expired_audio_samples(db)
+            if count:
+                print(f"[RETENTION] 보존기한 만료 audio_samples {count}건 삭제")
+        except Exception as exc:
+            print(f"[RETENTION] 삭제 작업 실패: {exc}")
+        finally:
+            db.close()
+        await asyncio.sleep(24 * 60 * 60)  # 하루 1회
+
+
 @app.on_event("startup")
 async def startup():
     global ai
@@ -267,6 +287,7 @@ async def startup():
     tts_dir = BACKEND_DIR / "assets/tts"
     tts_dir.mkdir(parents=True, exist_ok=True)
     asyncio.create_task(_generate_tts_files(tts_dir))
+    asyncio.create_task(_retention_purge_loop())
 
 
 # ── 연결 관리 ─────────────────────────────────────────────────────
@@ -947,7 +968,6 @@ async def _process_audio(
                 db = SessionLocal()
                 try:
                     sample = AudioSample(
-                        zone_id=zone_id,
                         zone_name=zone_name,
                         sensor_id_hash=hash_sensor_id(zone_id),
                         raw_audio_path=storage_path,
@@ -963,6 +983,8 @@ async def _process_audio(
                     )
                     db.add(sample)
                     db.commit()
+                    log_audit(db, actor="system", action="create",
+                               target_table="audio_samples", target_id=sample.audio_id)
                 finally:
                     db.close()
         except Exception as exc:
