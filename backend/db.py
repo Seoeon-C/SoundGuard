@@ -118,6 +118,7 @@ class AudioSample(Base):
     audio_id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
 
     zone_name = Column(EncryptedText, nullable=True)  # 표시용 사본 — 조회 키로 안 쓰이므로 암호화
+    zone_label = Column(String, nullable=True)        # 구역 환경 유형(산/공사장/저수지 등) — 위치 식별 안 되는 범주값이라 평문
     sensor_id_hash = Column(String, nullable=True)    # 원본 zone_id/sensor_id 대신 HMAC 해시만 저장
 
     raw_audio_path = Column(EncryptedText, nullable=False)

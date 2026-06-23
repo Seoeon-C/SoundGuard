@@ -967,8 +967,10 @@ async def _process_audio(
                 storage_path = upload_audio_file(tmp_path, zone_id)
                 db = SessionLocal()
                 try:
+                    zone_row = db.query(Zone).filter(Zone.id == zone_id).first()
                     sample = AudioSample(
                         zone_name=zone_name,
+                        zone_label=zone_row.label if zone_row else None,
                         sensor_id_hash=hash_sensor_id(zone_id),
                         raw_audio_path=storage_path,
                         beats_label=sound_event.label,
