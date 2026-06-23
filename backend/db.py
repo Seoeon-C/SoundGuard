@@ -117,9 +117,8 @@ class AudioSample(Base):
 
     audio_id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
 
-    zone_id = Column(String, nullable=True)
-    zone_name = Column(String, nullable=True)
-    sensor_id_hash = Column(String, nullable=True)   # 원본 sensor_id 대신 HMAC 해시 저장
+    zone_name = Column(EncryptedText, nullable=True)  # 표시용 사본 — 조회 키로 안 쓰이므로 암호화
+    sensor_id_hash = Column(String, nullable=True)    # 원본 zone_id/sensor_id 대신 HMAC 해시만 저장
 
     raw_audio_path = Column(EncryptedText, nullable=False)
 
@@ -151,6 +150,24 @@ class AuditLog(Base):
     target_table = Column(String, nullable=True)
     target_id = Column(String, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
+
+
+def log_audit(db, actor: str, action: str, target_table: str, target_id: str) -> None:
+    db.add(AuditLog(actor=actor, action=action, target_table=target_table, target_id=target_id))
+    db.commit()
+
+
+def purge_expired_audio_samples(db) -> int:
+    """retention_until이 지난 audio_samples 행을 삭제하고 삭제된 건수를 반환한다."""
+    expired = db.query(AudioSample).filter(AudioSample.retention_until < datetime.utcnow()).all()
+    count = len(expired)
+    for row in expired:
+        db.delete(row)
+    if count:
+        db.commit()
+        log_audit(db, actor="system", action="delete", target_table="audio_samples",
+                  target_id=f"{count} expired rows purged")
+    return count
 
 
 def init_db():
