@@ -39,7 +39,7 @@ from environmental_sound import BeatsEnvironmentClassifier, SoundEvent
 from stt import WhisperAPI
 from decision import GPTDecisionEngine, DecisionResult
 from output import EventLoggerAndMessenger
-from db import Zone, AudioSample, get_db, init_db, ZONE_LABELS, SessionLocal
+from db import Zone, AudioSample, get_db, init_db, ZONE_LABELS, SessionLocal, hash_sensor_id, generalize_coord
 from supabase_audio import upload_audio_file
 from tts import save_edge_tts
 
@@ -120,11 +120,13 @@ def get_zones(db: Session = Depends(get_db)):
 
 @app.post("/api/zones")
 def create_zone(body: dict = Body(...), db: Session = Depends(get_db)):
+    coord = body.get("coord")
     zone = Zone(
         id=body.get("id") or str(uuid.uuid4()),
         name=body["name"],
         label=body.get("label"),
-        coord=body.get("coord"),
+        coord=coord,
+        region_code=generalize_coord(coord),
     )
     db.add(zone)
     db.commit()
@@ -138,7 +140,9 @@ def update_zone(zone_id: str, body: dict = Body(...), db: Session = Depends(get_
         raise HTTPException(status_code=404, detail="구역을 찾을 수 없습니다.")
     if "name"  in body: zone.name  = body["name"]
     if "label" in body: zone.label = body["label"]
-    if "coord" in body: zone.coord = body["coord"]
+    if "coord" in body:
+        zone.coord = body["coord"]
+        zone.region_code = generalize_coord(body["coord"])
     db.commit()
     return {"id": zone.id, "name": zone.name, "label": zone.label, "coord": zone.coord}
 
@@ -611,6 +615,7 @@ async def sensor_endpoint(websocket: WebSocket):
                         id=str(uuid.uuid4()),
                         name=zone_info["zone_name"],
                         coord=zone_info.get("coord", ""),
+                        region_code=generalize_coord(zone_info.get("coord")),
                     )
                     db.add(new_zone)
                     db.commit()
@@ -944,7 +949,7 @@ async def _process_audio(
                     sample = AudioSample(
                         zone_id=zone_id,
                         zone_name=zone_name,
-                        sensor_id=zone_id,
+                        sensor_id_hash=hash_sensor_id(zone_id),
                         raw_audio_path=storage_path,
                         beats_label=sound_event.label,
                         beats_raw_label=sound_event.raw_label,
