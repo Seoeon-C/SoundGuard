@@ -87,3 +87,4 @@ npm run build
 | `public/map.html` | Leaflet 지도 (iframe으로 삽입, postMessage로 상태 수신) |
 | `public/SoundGuardLogo.png` | 헤더 로고 (34×34) |
 | `public/SoundGuardLogo_0.png` | 로그인 로고 (90×90) |
+| `public/wall.mp4`, `camping.mp4`, `crossover.mp4` | 구역별 CCTV 영상 (데모용 목업, 구역명에 따라 매칭) |

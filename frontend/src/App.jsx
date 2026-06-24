@@ -409,7 +409,7 @@ function MainScreen({ adminId, config, serverIP, onGoConfig, onLogout, onUpdateC
   const [zoneModal, setZoneModal] = useState(false)
   const [mapInfoModal, setMapInfoModal] = useState(false)
 
-  const [mapCoord, setMapCoord] = useState("37.5665° N, 126.9780° E")
+  const [mapCoord, setMapCoord] = useState("36.6513° N, 127.4866° E")
   const [mapAddr, setMapAddr] = useState(config.zone || "관할 구역 주소 미상")
   const [settingsModal, setSettingsModal] = useState(false)
   const [notifPanelOpen, setNotifPanelOpen] = useState(false)
@@ -484,7 +484,7 @@ function MainScreen({ adminId, config, serverIP, onGoConfig, onLogout, onUpdateC
           const first = serverZones[0]
           setSelectedZoneId(first.id)
           onUpdateConfig({ ...configRef.current, zone: first.name })
-          setMapCoord(first.coord || "37.5665° N, 126.9780° E")
+          setMapCoord(first.coord || "36.6513° N, 127.4866° E")
           setMapAddr(first.addr || first.label || "")
         }
       })
@@ -516,7 +516,7 @@ function MainScreen({ adminId, config, serverIP, onGoConfig, onLogout, onUpdateC
       const firstZone = zones[0]
       setSelectedZoneId(firstZone.id)
       onUpdateConfig({ ...configRef.current, zone: firstZone.name })
-      setMapCoord(firstZone.coord || "37.5665° N, 126.9780° E")
+      setMapCoord(firstZone.coord || "36.6513° N, 127.4866° E")
       setMapAddr(firstZone.addr || firstZone.label || "")
     }
   }, [selectedZoneId, zones])
@@ -525,7 +525,7 @@ function MainScreen({ adminId, config, serverIP, onGoConfig, onLogout, onUpdateC
     const nextZone = normalizeZoneFromServer(zone)
     setSelectedZoneId(nextZone.id)
     onUpdateConfig({ ...configRef.current, zone: nextZone.name })
-    setMapCoord(nextZone.coord || "37.5665° N, 126.9780° E")
+    setMapCoord(nextZone.coord || "36.6513° N, 127.4866° E")
     setMapAddr(nextZone.addr || nextZone.label || "")
 
     if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
@@ -614,7 +614,7 @@ function MainScreen({ adminId, config, serverIP, onGoConfig, onLogout, onUpdateC
       } else {
         setSelectedZoneId(null)
         onUpdateConfig({ ...configRef.current, zone: "" })
-        setMapCoord("37.5665° N, 126.9780° E")
+        setMapCoord("36.6513° N, 127.4866° E")
         setMapAddr("")
       }
     }
@@ -777,7 +777,7 @@ function MainScreen({ adminId, config, serverIP, onGoConfig, onLogout, onUpdateC
       id: Date.now() + Math.random(),
       zoneId: resolvedZoneId,
       zoneName,
-      coord: matchedZone?.coord || payload.coord || payload.map_coord || "37.5665° N, 126.9780° E",
+      coord: matchedZone?.coord || payload.coord || payload.map_coord || "36.6513° N, 127.4866° E",
       addr: matchedZone?.addr || payload.addr || payload.address || zoneName,
       kind,
       type,
@@ -1086,7 +1086,7 @@ function MainScreen({ adminId, config, serverIP, onGoConfig, onLogout, onUpdateC
       selectZone(zone)
     } else {
       onUpdateConfig({ ...configRef.current, zone: notice.zoneName || "관리구역 미지정" })
-      setMapCoord(notice.coord || "37.5665° N, 126.9780° E")
+      setMapCoord(notice.coord || "36.6513° N, 127.4866° E")
       setMapAddr(notice.addr || notice.zoneName || "관할 구역 주소 미상")
     }
     setNotifications(prev => prev.map(n => n.id === notice.id ? { ...n, read: true } : n))
@@ -1184,7 +1184,7 @@ function MainScreen({ adminId, config, serverIP, onGoConfig, onLogout, onUpdateC
     const value = String(input || "").trim()
     if (!value) return
     if (!isCoordinateInput(value)) {
-      alert("GPS 좌표 칸에는 좌표만 입력해 주세요. 예: 37.5665, 126.9780")
+      alert("GPS 좌표 칸에는 좌표만 입력해 주세요. 예: 36.651346, 127.486573")
       return
     }
     const nums = value.match(/-?\d+(\.\d+)?/g)
@@ -1345,7 +1345,7 @@ function MainScreen({ adminId, config, serverIP, onGoConfig, onLogout, onUpdateC
 
   const parseCoord = (coord) => {
     const nums = String(coord).match(/-?\d+(\.\d+)?/g)
-    return { lat: nums?.[0] || "37.5665", lon: nums?.[1] || "126.9780" }
+    return { lat: nums?.[0] || "36.651346", lon: nums?.[1] || "127.486573" }
   }
 
   const { lat, lon } = parseCoord(mapCoord)
@@ -1813,7 +1813,7 @@ function MainScreen({ adminId, config, serverIP, onGoConfig, onLogout, onUpdateC
                   {editingZoneId === zone.id ? (
                     <div style={{ background:C.cyanSoft, border:`1px solid ${C.cyanBorder}`, borderRadius:C.rMd, padding:10, display:"flex", flexDirection:"column", gap:6 }}>
                       <input className="sg-input sg-input--compact" value={editName} onChange={e=>setEditName(e.target.value)} placeholder="구역명" />
-                      <input className="sg-input sg-input--compact" value={editCoord} onChange={e=>setEditCoord(e.target.value)} placeholder="좌표 예: 37.5665, 126.9780" />
+                      <input className="sg-input sg-input--compact" value={editCoord} onChange={e=>setEditCoord(e.target.value)} placeholder="좌표 예: 36.651346, 127.486573" />
                       <select className="sg-input sg-input--compact sg-input--select" value={editLabel} onChange={e=>setEditLabel(e.target.value)}>
                         {ZONE_LABELS.map(l => <option key={l} value={l}>{l}</option>)}
                       </select>
@@ -1846,14 +1846,14 @@ function MainScreen({ adminId, config, serverIP, onGoConfig, onLogout, onUpdateC
                 value={newZoneCoord}
                 onChange={e => setNewZoneCoord(e.target.value)}
                 onKeyDown={e => { if (e.key === "Enter") applyNewZoneLocationInput(e.target.value) }}
-                placeholder="좌표만 입력 예: 37.5665, 126.9780 (Enter로 검색)"
+                placeholder="좌표만 입력 예: 36.651346, 127.486573 (Enter로 검색)"
               />
               <input
                 className="sg-input"
                 value={newZoneAddr}
                 onChange={e => setNewZoneAddr(e.target.value)}
                 onKeyDown={e => { if (e.key === "Enter") applyNewZoneLocationInput(e.target.value) }}
-                placeholder="주소 또는 장소명 예: 인하대학교 (Enter로 좌표 자동입력)"
+                placeholder="주소 또는 장소명 예: 충청북도청 (Enter로 좌표 자동입력)"
               />
               <select className="sg-input sg-input--select" value={newZoneLabel} onChange={e => setNewZoneLabel(e.target.value)}>
                 {ZONE_LABELS.map(l => <option key={l} value={l}>{l}</option>)}
@@ -1879,7 +1879,7 @@ function MainScreen({ adminId, config, serverIP, onGoConfig, onLogout, onUpdateC
                 value={mapCoord}
                 onChange={e => setMapCoord(e.target.value)}
                 onKeyDown={e => { if (e.key === "Enter") applyCoordInput(e.target.value) }}
-                placeholder="좌표만 입력 예: 37.450000, 126.650000 (Enter로 이동)"
+                placeholder="좌표만 입력 예: 36.651346, 127.486573 (Enter로 이동)"
               />
             </div>
             <div style={{ marginBottom:20 }}>
@@ -1889,7 +1889,7 @@ function MainScreen({ adminId, config, serverIP, onGoConfig, onLogout, onUpdateC
                 value={mapAddr}
                 onChange={e => setMapAddr(e.target.value)}
                 onKeyDown={e => { if (e.key === "Enter") applyLocationInput(e.target.value) }}
-                placeholder="주소 또는 장소명 예: 인하대학교 (Enter로 좌표 자동입력)"
+                placeholder="주소 또는 장소명 예: 충청북도청 (Enter로 좌표 자동입력)"
               />
             </div>
             <div style={{ display:"flex", gap:10 }}>
