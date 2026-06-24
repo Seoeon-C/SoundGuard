@@ -6,7 +6,7 @@
 
 ## 주요 기능
 
-- **실시간 음향 분류** — Microsoft BEATs 모델로 배경음 / 사람 목소리 / 발소리 / 충격음 등 5가지 클래스 분류
+- **실시간 음향 분류** — Microsoft BEATs 모델로 배경음 / 사람 목소리 / 상호작용음 / 충격음 등 4가지 클래스 분류
 - **음성 인식(STT)** — OpenAI Whisper로 음성 내용 텍스트 변환, 응급 키워드 감지
 - **AI 상황 판단** — 규칙 기반 + GPT-4o-mini를 결합한 2단계 판단 엔진
 - **자동 경고 방송** — 1차 → 2차 경고 에스컬레이션, 응급 시 180초 잠금 후 반복 안내
@@ -57,15 +57,14 @@ server.py
 SoundGuard/
 ├── backend/               Oracle Cloud 서버 (핵심)
 │   ├── server.py          메인 서버 (FastAPI, WebSocket 엔드포인트)
-│   ├── app.py             로컬 PC 단독 실행용 앱 (서버 없이 동작)
 │   ├── decision.py        GPT 판단 엔진
 │   ├── environmental_sound.py  BEATs 음향 분류 모듈
 │   ├── stt.py             Whisper STT 모듈
 │   ├── tts.py             Edge TTS mp3 생성
-│   ├── db.py              DB 모델 (Zone, AudioSample)
+│   ├── db.py              DB 모델 (Zone, AudioSample, AuditLog) + 비식별화(암호화/해시/보존기한)
 │   ├── supabase_audio.py  Supabase Storage 업로드
 │   ├── config.py          환경변수 로드 및 설정 관리
-│   ├── output.py          이벤트 로거 (app.py 전용)
+│   ├── output.py          이벤트 로거 (EventLoggerAndMessenger)
 │   ├── ontology.json      AudioSet 분류 체계 (BEATs 라벨 변환용)
 │   ├── requirements.txt   Python 패키지 목록
 │   ├── .env.example       환경변수 예시
@@ -114,6 +113,23 @@ SoundGuard/
 
 ---
 
+## DB 구조 및 비식별화
+
+수집되는 음향 데이터에는 위치·음성 등 민감 정보가 포함될 수 있어, 저장 단계에서 비식별화 처리를 적용했습니다.
+
+| 테이블 | 역할 | 비식별화 처리 |
+|---|---|---|
+| `zones` | 구역(센서 위치) 관리 — 실시간 라우팅용 | 정밀 좌표(`coord`) 암호화, 좌표를 1km 단위로 일반화한 `region_code` 별도 보관 |
+| `audio_samples` | 음향 분석 결과 저장 | 구역명(`zone_name`)·음성 인식 텍스트(`stt_text`)·오디오 파일 경로(`raw_audio_path`) 암호화, 구역/센서 식별자는 원본 대신 HMAC 해시(`sensor_id_hash`)만 저장, 생성 90일 후 자동 삭제(`retention_until`) |
+| `audit_logs` | 데이터 처리 이력 감사 로그 | 데이터 생성·수정·삭제 시 처리 주체/대상을 자동 기록 |
+
+- **암호화**: Fernet(AES) 대칭키 암호화. 키(`FIELD_ENCRYPTION_KEY`)를 가진 서버만 복호화 가능
+- **가명화**: 비밀키 기반 HMAC-SHA256(`SENSOR_ID_HASH_KEY`)으로 원본 식별자 역추적 차단
+- **보존기한 자동 삭제**: 서버가 하루 1회 백그라운드로 만료된 `audio_samples` 행을 자동 삭제 (`db.py`의 `purge_expired_audio_samples`)
+- 자세한 컬럼별 설명은 [DEIDENTIFICATION.md](DEIDENTIFICATION.md) 참고
+
+---
+
 ## 실행 환경 설정
 
 ### 1. 환경변수 설정
@@ -127,6 +143,10 @@ DATABASE_URL=postgresql://...
 SUPABASE_URL=https://...
 SUPABASE_SERVICE_ROLE_KEY=sb_secret_...
 ZONE_NAME=위험구역 A
+
+# 비식별화 (각자 새로 생성, 절대 공유/커밋 금지)
+FIELD_ENCRYPTION_KEY=...
+SENSOR_ID_HASH_KEY=...
 ```
 
 ### 2. AI 모델 파일 준비

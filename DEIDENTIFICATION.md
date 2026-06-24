@@ -17,6 +17,7 @@
 |---|---|---|
 | `audio_id` | 평문 | 단순 UUID PK |
 | `zone_name` | **암호화** | 표시용 사본이라 조회 키로 안 쓰여서 암호화 가능했음 |
+| `zone_label` | 평문 | 구역 환경 유형(산/공사장/저수지 등) — 위치를 특정하지 못하는 범주값이라 평문 유지, 구역 유형별 모델 재학습 분석에 활용 |
 | `sensor_id_hash` | **HMAC 해시** | 원본 zone_id/sensor_id 대신 비밀키 기반 해시만 저장 (역추적 불가) |
 | `raw_audio_path` | **암호화** | Supabase Storage 내 오디오 파일 경로 |
 | `beats_label` / `beats_raw_label` / `beats_confidence` | 평문 | 분류 결과일 뿐 개인정보 아님 |
@@ -48,6 +49,7 @@
 - **가명화 (HMAC, `SENSOR_ID_HASH_KEY`)**: 디바이스/구역 식별자 → `sensor_id_hash`
 - **평문 유지**: 분류 라벨, 타임스탬프, 감사 로그, 그리고 실시간 조회/라우팅에 쓰이는 `Zone.id`/`Zone.name`
 - **보존기간**: `audio_samples`는 생성 후 90일이 지나면 서버가 자동으로 삭제 (`db.py`의 `purge_expired_audio_samples`, `server.py`의 `_retention_purge_loop`가 하루 1회 실행)
+- **타임스탬프**: 모든 `created_at`/`retention_until`은 한국 시간(KST, UTC+9) 기준으로 저장 (`db.py`의 `now_kst()`)
 
 ## 관련 코드
 

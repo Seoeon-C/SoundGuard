@@ -89,7 +89,7 @@
       id: "default",
       name: params.get("name") || "관리구역 미지정",
       addr: params.get("addr") || "관할 구역 주소 미상",
-      coord: `${params.get("lat") || 37.5665}, ${params.get("lon") || 126.9780}`,
+      coord: `${params.get("lat") || 36.651346}, ${params.get("lon") || 127.486573}`,
       status: legacyStatusToNumber(params.get("status")),
       selected: true,
     }];
@@ -100,7 +100,7 @@
       .map(z => ({ ...z, latlon: parseCoord(z.coord) }))
       .filter(z => z.latlon);
 
-    const center = parsedZones.find(z => z.selected)?.latlon || parsedZones[0]?.latlon || [37.5665, 126.9780];
+    const center = parsedZones.find(z => z.selected)?.latlon || parsedZones[0]?.latlon || [36.651346, 127.486573];
 
     const map = L.map("map", {
       zoomControl: false,

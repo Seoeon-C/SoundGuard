@@ -23,6 +23,8 @@ Oracle Cloud 서버 (<서버_공인IP>)
 | `<서버_공인IP>` | Oracle Cloud 서버 IP | Oracle 콘솔 → Instance → Public IP |
 | `<SSH_키_경로>` | Oracle SSH 키 파일 경로 | 키 발급 시 저장한 경로 |
 | `<VWorld_API_키>` | VWorld 지도 API 키 | https://www.vworld.kr |
+| `FIELD_ENCRYPTION_KEY` | DB 민감컬럼 암호화 키(Fernet) | `python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"` |
+| `SENSOR_ID_HASH_KEY` | 구역/센서 식별자 해시용 비밀키 | `python -c "import secrets; print(secrets.token_hex(32))"` |
 
 ---
 
@@ -75,13 +77,31 @@ sudo systemctl enable nginx
 Networking → VCN → Subnet → Default Security List
 → Add Ingress Rules
   Source CIDR: 0.0.0.0/0 / Protocol: TCP / Destination Port: 80
+  Source CIDR: 0.0.0.0/0 / Protocol: TCP / Destination Port: 8000   (센서 앱/대시보드 WebSocket용)
 ```
 
 **서버 내부:**
 ```bash
 sudo iptables -I INPUT 5 -m state --state NEW -p tcp --dport 80 -j ACCEPT
+sudo iptables -I INPUT 5 -m state --state NEW -p tcp --dport 8000 -j ACCEPT
 sudo netfilter-persistent save
 ```
+
+> `netfilter-persistent save`를 안 하면 서버 재부팅 시 규칙이 사라져 모바일 앱/대시보드가 갑자기 연결 안 되는 문제가 생길 수 있다 (8000번 규칙은 특히 누락되기 쉬움 — 꼭 같이 저장).
+
+### 2-4. Supabase 설정 (DB/Storage)
+
+`.env`에 `DATABASE_URL`, `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `FIELD_ENCRYPTION_KEY`, `SENSOR_ID_HASH_KEY` 설정 필요 (DB 비식별화에 사용, 절대 공유/커밋 금지).
+
+Storage에 오디오 저장용 버킷도 미리 만들어야 함:
+```
+Supabase 콘솔 → Storage → New bucket
+  이름: audio-samples (SUPABASE_AUDIO_BUCKET과 동일하게)
+  Public bucket: OFF
+  Restrict file size / MIME types: 켜기 권장 (30MB, audio/wav)
+```
+
+서버 최초 기동 시 `init_db()`가 `zones`/`audio_samples`/`audit_logs` 테이블을 자동 생성한다. 단, 기존 테이블에 컬럼을 추가하는 마이그레이션은 자동으로 안 되므로, DB 스키마(`db.py`)를 바꿨다면 Supabase SQL Editor에서 직접 `ALTER TABLE`로 컬럼을 추가/삭제해야 한다.
 
 ---
 
@@ -181,7 +201,7 @@ ls -lh ~/backend/received/
 # 수신된 오디오 파일 삭제
 rm ~/backend/received/*
 
-# 구역 DB
+# 구역 DB (DATABASE_URL 미설정 시 fallback용 로컬 sqlite — 운영 환경은 Supabase Postgres 사용)
 ls -lh ~/backend/zones.db
 
 # 디스크 / 메모리 사용량
@@ -213,6 +233,8 @@ VITE_BACKEND_IP=localhost:8000      # 로컬 서버 사용 시
 | 수정한 파일 | 해야 할 작업 |
 |------------|------------|
 | `backend/server.py` 등 Python 파일 | scp 업로드 → `systemctl restart soundguard` |
+| `backend/requirements.txt` (패키지 추가/변경) | scp 업로드 → `pip install -r requirements.txt` → `systemctl restart soundguard` |
+| `backend/db.py` (DB 스키마 변경) | scp 업로드 → Supabase SQL Editor에서 `ALTER TABLE`로 컬럼 반영 → `systemctl restart soundguard` |
 | `frontend/src/App.jsx` 등 React 파일 | 빌드 → scp 업로드 |
 | `frontend/public/map.html` | scp 업로드 (빌드 불필요) |
 | `frontend/.env.production` | 빌드 → scp 업로드 |
@@ -240,9 +262,11 @@ sudo systemctl restart nginx
 sudo iptables -L INPUT -n | grep 80
 ```
 
-### WebSocket 연결 실패 시
+### WebSocket 연결 실패 시 (모바일 앱/대시보드)
 1. `systemctl status soundguard`로 서버 실행 중인지 확인
 2. `.env.production`의 IP가 현재 서버 IP와 일치하는지 확인
+3. `sudo iptables -L INPUT -n | grep 8000`으로 8000번 포트가 열려있는지 확인 (서버 재부팅 후 `netfilter-persistent save` 안 했으면 사라져 있을 수 있음)
+4. Oracle 콘솔 Security List에도 8000번 Ingress 규칙이 있는지 확인
 
 ### assets 권한 오류 시
 ```bash
