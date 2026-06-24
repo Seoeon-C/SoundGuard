@@ -3,7 +3,7 @@ import hmac
 import re
 import uuid
 import os
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -27,6 +27,14 @@ SessionLocal = sessionmaker(bind=engine, autocommit=False, autoflush=False)
 Base = declarative_base()
 
 ZONE_LABELS = ["산", "공사장", "저수지", "강", "논"]
+
+KST = timezone(timedelta(hours=9))
+
+
+def now_kst() -> datetime:
+    """Supabase Table Editor가 시간대 변환 없이 저장값을 그대로 보여주므로,
+    화면에 보이는 시각이 실제 한국 시각과 일치하도록 KST 기준으로 저장한다."""
+    return datetime.now(KST).replace(tzinfo=None)
 
 
 # -----------------------------------------------------------------------------
@@ -84,7 +92,7 @@ def hash_sensor_id(sensor_id: str) -> str:
 
 def default_retention(days: int = 90) -> datetime:
     """민감 데이터 기본 보존 기한 계산 (배치 삭제 작업에서 사용)."""
-    return datetime.utcnow() + timedelta(days=days)
+    return now_kst() + timedelta(days=days)
 
 
 _COORD_RE = re.compile(r"(-?\d+(?:\.\d+)?)\D*([NS])\D*?(-?\d+(?:\.\d+)?)\D*([EW])", re.IGNORECASE)
@@ -109,7 +117,7 @@ class Zone(Base):
     label      = Column(String,        nullable=True)    # 산/공사장/저수지/강/논
     coord      = Column(EncryptedText, nullable=True)    # 정밀 좌표 → 암호화
     region_code = Column(String,       nullable=True)    # 정밀 좌표 대신 쓰는 광역 단위(예: "서울특별시 강남구")
-    created_at = Column(DateTime,      default=datetime.utcnow)
+    created_at = Column(DateTime,      default=now_kst)
 
 
 class AudioSample(Base):
@@ -137,7 +145,7 @@ class AudioSample(Base):
     model_version = Column(String, nullable=True)
     is_pseudonymized = Column(Integer, default=1)
     retention_until = Column(DateTime, nullable=True, default=default_retention)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=now_kst)
 
 
 class AuditLog(Base):
@@ -150,7 +158,7 @@ class AuditLog(Base):
     action = Column(String, nullable=False)        # create/read/update/delete/review/export
     target_table = Column(String, nullable=True)
     target_id = Column(String, nullable=True)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=now_kst)
 
 
 def log_audit(db, actor: str, action: str, target_table: str, target_id: str) -> None:
@@ -160,7 +168,7 @@ def log_audit(db, actor: str, action: str, target_table: str, target_id: str) ->
 
 def purge_expired_audio_samples(db) -> int:
     """retention_until이 지난 audio_samples 행을 삭제하고 삭제된 건수를 반환한다."""
-    expired = db.query(AudioSample).filter(AudioSample.retention_until < datetime.utcnow()).all()
+    expired = db.query(AudioSample).filter(AudioSample.retention_until < now_kst()).all()
     count = len(expired)
     for row in expired:
         db.delete(row)
